@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# commit-msg — validates the commit message format (Conventional Commits).
+# $1 = path to the file containing the prepared commit message.
+set -u
+ROOT="$(git rev-parse --show-toplevel)"
+. "$ROOT/.githooks/lib/checks.sh"
+
+SUBJECT=$(head -n1 "$1")
+
+# Allow merge/revert/fixup commits Git generates automatically.
+case "$SUBJECT" in
+  "Merge "*|"Revert "*|"fixup!"*|"squash!"*) exit 0 ;;
+esac
+
+if ! check_commit_subject "$SUBJECT"; then
+  echo "──────────────────────────────"
+  echo "FAIL commit-msg rejected"
+  echo "   Edit the message or bypass with: git commit --no-verify"
+  exit 1
+fi
+exit 0

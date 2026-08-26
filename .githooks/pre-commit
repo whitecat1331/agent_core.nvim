@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# pre-commit — runs before a commit is recorded.
+# Scope: FAST checks on staged files only. Keep this under a few seconds.
+set -u
+ROOT="$(git rev-parse --show-toplevel)"
+. "$ROOT/.githooks/lib/checks.sh"
+
+echo "──────────────────────────────"
+echo " pre-commit gate"
+echo "──────────────────────────────"
+FAILED=0
+
+check_no_env_staged              || FAILED=$((FAILED + 1))
+check_hardcoded_secrets staged   || FAILED=$((FAILED + 1))
+check_detect_secrets_staged      || FAILED=$((FAILED + 1))
+check_stylua_staged              || FAILED=$((FAILED + 1))
+
+# Cheap full-repo policy checks
+check_gitignore_protects_secrets || FAILED=$((FAILED + 1))
+check_no_env_tracked             || FAILED=$((FAILED + 1))
+check_no_keys_json_tracked       || FAILED=$((FAILED + 1))
+check_no_avante_md_tracked       || FAILED=$((FAILED + 1))
+
+if [ $FAILED -gt 0 ]; then
+  echo "──────────────────────────────"
+  echo "FAIL commit BLOCKED: $FAILED check(s) failed"
+  echo "   Bypass (sparingly): git commit --no-verify"
+  echo "   Note: GitHub Actions re-runs these gates and will still block the PR."
+  exit 1
+fi
+echo "PASS pre-commit OK"
+exit 0

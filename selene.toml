@@ -1,0 +1,7 @@
+# selene config for agent_core.nvim (a Neovim Lua plugin).
+# Loads the custom standard library in vim.yml, which declares the Neovim `vim`
+# global so selene can still catch undefined-variable typos.
+std = "vim"
+
+[rules]
+unused_variable = "allow"

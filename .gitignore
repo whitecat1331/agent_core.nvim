@@ -1,0 +1,38 @@
+# Secrets and credentials — never commit these
+
+.env
+.env.*
+!.env.example
+
+# Local API-key store (fallback for agent_core.keys)
+agent_keys.json
+
+# agent_core indexer output — generated, never committed
+AVANTE.md
+
+# Neovim / Lua tooling
+doc/tags
+.luacheckcache
+*.luac
+.selene/
+.stylua-cache/
+.lazy/
+
+# Per-project MCP / semantic index caches
+.mcphub/
+.semnav/
+
+# Python (detect-secrets, CI helpers)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Logs
+*.log

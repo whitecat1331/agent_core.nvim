@@ -1,0 +1,95 @@
+*agent_core.txt*  Agent orchestrator for Neovim
+
+==============================================================================
+CONTENTS                                                      *agent_core*
+
+  1. Introduction ................. |agent_core-intro|
+  2. Installation ................. |agent_core-install|
+  3. Commands ..................... |agent_core-commands|
+  4. Configuration ................ |agent_core-config|
+  5. Project brief ................ |agent_core-brief|
+  6. Profiles ..................... |agent_core-profiles|
+  7. MCP indexing ................. |agent_core-mcp|
+
+==============================================================================
+1. INTRODUCTION                                     *agent_core-intro*
+
+agent_core bundles agent/key profiles with one-key switching, an indexer that
+generates a committable project brief (AVANTE.md), and a two-tier context
+strategy: the brief is always injected into the system prompt, while deep
+semantic/structural context is pulled on demand via MCP tools.
+
+==============================================================================
+2. INSTALLATION                                     *agent_core-install*
+
+With lazy.nvim: >
+
+  {
+    "whitecat1331/agent_core.nvim",
+    config = function()
+      require("agent_core").setup()
+    end,
+  }
+<
+
+==============================================================================
+3. COMMANDS                                         *agent_core-commands*
+
+                                                *:AgentSwitch*
+:AgentSwitch    Pick an agent/key profile and apply it.
+                Default keymap: <leader>aP
+
+                                                *:AgentIndex*
+:AgentIndex     Regenerate the project brief (AVANTE.md) for the current repo.
+                Default keymap: <leader>aI
+
+                                                *:AgentProfile*
+:AgentProfile   Show the active agent profile.
+                Default keymap: <leader>ap
+
+==============================================================================
+4. CONFIGURATION                                    *agent_core-config*
+
+Call |agent_core.setup()| with an optional table to override defaults: >
+
+  require("agent_core").setup({
+    brief_filename = "AVANTE.md",
+    semnav_bin = "semnav",
+    brief_prompt_max_chars = 8000,
+    refresh_debounce_ms = 5000,
+    profiles = nil,
+    excluded_dirs = { ".git", "node_modules", ".venv", "vendor" },
+  })
+<
+
+get_brief_prompt()                              *agent_core.get_brief_prompt()*
+  Returns the project brief text to inject into the system prompt, or "" when
+  no brief exists. Bounded by |brief_prompt_max_chars|.
+
+==============================================================================
+5. PROJECT BRIEF                                    *agent_core-brief*
+
+:AgentIndex writes AVANTE.md at the git root (or cwd when not a repo). It is
+structural only — file paths, language counts, key files, and build/test
+commands. It never embeds file contents, so it cannot leak secrets, and it is
+safe to commit. The brief auto-refreshes (debounced) after every BufWritePost,
+but only if it already exists.
+
+==============================================================================
+6. PROFILES                                         *agent_core-profiles*
+
+Profiles live in lua/agent_core/profiles.lua (M.defaults). Each bundles name,
+provider, model, api_key_name, and an optional description / system_prompt.
+API keys are resolved env-first: profile.api_key > os.getenv(api_key_name) >
+agent_keys.json (0600). Never put real keys in profiles.lua.
+
+==============================================================================
+7. MCP INDEXING                                     *agent_core-mcp*
+
+ripvec (semantic + BM25 + LSP search) is registered globally. semnav (LSP
+semantic graph) is opted in per project: :AgentIndex detects a supported
+language and writes the project .mcphub/servers.json, then runs a one-time
+`semnav index`. Tracked daemons are stopped on VimLeavePre.
+
+==============================================================================
+vim:tw=78:ts=2:sw=2:et:ft=help:norl:

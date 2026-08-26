@@ -1,0 +1,36 @@
+# Publish a GitHub Release when a version tag (v*) is pushed.
+# The release notes are pulled from CHANGELOG.md (Keep a Changelog).
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Extract changelog section
+        id: changelog
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="## [$version]" '
+            $0 ~ ("^## \\[" version "\\]") { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          echo "notes_path=$RUNNER_TEMP/notes.md" >> "$GITHUB_OUTPUT"
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191  # softprops/action-gh-release@v2.0.8
+        with:
+          body_path: ${{ steps.changelog.outputs.notes_path }}
+          draft: false
+          generate_release_notes: true

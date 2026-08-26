@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# pre-push — final local gate before anything reaches GitHub.
+# Scope: full-repo + new-commit-range checks + format/lint/smoke sweep.
+#
+# Open-source model: unlike the internal (private) repos, this does NOT block
+# direct pushes to main. The default branch is main, maintainers push it
+# directly, and contributors open PRs. GitHub Actions re-runs every gate on the
+# server regardless.
+#
+# stdin: <local_ref> <local_sha> <remote_ref> <remote_sha>  (per ref pushed)
+set -u
+ROOT="$(git rev-parse --show-toplevel)"
+. "$ROOT/.githooks/lib/checks.sh"
+
+REMOTE="${1:-origin}"
+RANGE=""
+FAILED=0
+
+while read -r LOCAL_REF LOCAL_SHA REMOTE_REF REMOTE_SHA; do
+  [ -z "${LOCAL_SHA:-}" ] && continue
+  [ "$LOCAL_SHA" = "0000000000000000000000000000000000000000" ] && continue
+  if [ "${REMOTE_SHA:-}" = "0000000000000000000000000000000000000000" ] || [ -z "${REMOTE_SHA:-}" ]; then
+    RANGE="$LOCAL_SHA --not --remotes=$REMOTE"
+  else
+    RANGE="$REMOTE_SHA..$LOCAL_SHA"
+  fi
+done
+
+echo "──────────────────────────────────────────────"
+echo " pre-push gate ($REMOTE)"
+echo "──────────────────────────────────────────────"
+
+# Validate commit messages in the push range
+if [ -n "$RANGE" ]; then
+  check_commits_range "$RANGE" || FAILED=$((FAILED + 1))
+fi
+
+# Repo hygiene & secrets
+check_no_env_tracked            || FAILED=$((FAILED + 1))
+check_no_keys_json_tracked      || FAILED=$((FAILED + 1))
+check_no_avante_md_tracked      || FAILED=$((FAILED + 1))
+check_gitignore_protects_secrets|| FAILED=$((FAILED + 1))
+check_hardcoded_secrets         || FAILED=$((FAILED + 1))
+check_log_sensitive_lua         || FAILED=$((FAILED + 1))
+check_detect_secrets            || FAILED=$((FAILED + 1))
+check_gitleaks                  || FAILED=$((FAILED + 1))
+
+# Format / lint / smoke
+check_stylua_all                || FAILED=$((FAILED + 1))
+check_selene                    || FAILED=$((FAILED + 1))
+check_smoke_nvim                || FAILED=$((FAILED + 1))
+
+echo "──────────────────────────────────────────────"
+if [ $FAILED -gt 0 ]; then
+  echo "FAIL push BLOCKED: $FAILED check(s) failed"
+  echo "   Bypass (sparingly, justify in PR): git push --no-verify"
+  echo "   Note: GitHub Actions re-runs every gate — a bypassed push still fails the PR."
+  exit 1
+fi
+echo "PASS All pre-push checks passed — pushing to $REMOTE"
+exit 0

@@ -1,0 +1,201 @@
+# agent_core.nvim CI — authoritative re-run of the local hook gates plus
+# server-only scanners. Runs on every push to main and every PR into main.
+#
+# Division of labour (githooks vs Actions):
+#   - Local hooks give fast feedback and block bad commits/pushes early.
+#   - These Actions re-run the SAME .githooks/lib/checks.sh logic so a push
+#     made with --no-verify still cannot merge. Actions also run heavier,
+#     server-only scanners (gitleaks, semgrep) that are too slow for a hook.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  commits:
+    name: Validate commit messages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Validate commit messages
+        env:
+          CI_EVENT_NAME: ${{ github.event_name }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CI_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CI_BEFORE_SHA: ${{ github.event.before }}
+          CI_SHA: ${{ github.sha }}
+        run: bash .githooks/lib/checks.sh run_ci_commits
+
+  security:
+    name: Security gate (shared checks.sh)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # actions/setup-python@v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Install detect-secrets
+        run: pip install detect-secrets
+      - name: Run shared security checks
+        run: bash .githooks/lib/checks.sh run_ci_security
+
+  gitleaks:
+    name: Secret scan (full history)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # actions/checkout@v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # gitleaks/gitleaks-action@v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  lint:
+    name: Format & lint (stylua + selene)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # actions/checkout@v4.2.2
+      - uses: taiki-e/install-action@v2  # installs stylua + selene from prebuilt binaries
+        with:
+          tool: stylua,selene
+      - name: Run shared lint checks
+        run: bash .githooks/lib/checks.sh run_ci_lint
+
+  smoke:
+    name: Headless nvim smoke test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # actions/checkout@v4.2.2
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: stable
+      - name: Run shared smoke check
+        shell: bash
+        run: bash .githooks/lib/checks.sh run_ci_smoke
+
+  semgrep:
+    name: Semgrep (report-only)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # actions/checkout@v4.2.2
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # actions/setup-python@v6.3.0
+        with:
+          python-version: "3.12"
+      - name: Install Semgrep
+        run: pip install semgrep
+      - name: Run Semgrep
+        run: |
+          set +e
+          semgrep \
+            --config p/lua \
+            --config p/secrets \
+            --config p/security-audit \
+            . \
+            --json \
+            --output semgrep-results.json
+          rc=$?
+          set -e
+          if [ "$rc" -gt 1 ]; then
+            echo "Semgrep execution failed"
+            exit "$rc"
+          fi
+          echo "Semgrep scan complete (findings are report-only)"
+      - name: Upload Semgrep results
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # actions/upload-artifact@v7.0.1
+        if: always()
+        with:
+          name: semgrep-results
+          path: semgrep-results.json
+          retention-days: 90
+
+  actionlint:
+    name: Validate GitHub Actions workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # actions/checkout@v4.2.2
+      - name: Download actionlint
+        run: curl -sSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash | bash
+      - name: Lint workflow files
+        run: ./actionlint -color
+
+  notify:
+    name: Notify on Completion
+    runs-on: ubuntu-latest
+    needs: [commits, security, gitleaks, lint, smoke, actionlint]
+    if: always()
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Post status comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # actions/github-script@v9.0.0
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const jobs = JSON.parse(process.env.NEEDS_JSON);
+            const blocking = ['commits', 'security', 'gitleaks', 'lint', 'smoke', 'actionlint'];
+            const blockingFailed = blocking.some(n => jobs[n] && ['failure', 'cancelled'].includes(jobs[n].result));
+            const icon = blockingFailed ? '❌' : '✅';
+            const statusLabel = blockingFailed ? 'Blocking checks failed' : 'All blocking checks passed';
+            const statusWord = blockingFailed ? 'FAILED' : 'succeeded';
+            const lines = Object.entries(jobs).map(([name, j]) =>
+              `| ${j.result === 'success' ? '✅' : (j.result === 'skipped' ? '⏭' : '❌')} | ${name} | ${j.result} |`
+            );
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const comment = `${icon} **${context.workflow} ${statusWord}** on \`${context.ref}\`\n\n[View run](${runUrl})`;
+
+            await core.summary
+              .addHeading(`${icon} agent_core.nvim CI — ${statusLabel}`)
+              .addTable([
+                [{data: 'Status', header: true}, {data: 'Job', header: true}, {data: 'Result', header: true}],
+                ...lines.map(l => {
+                  const parts = l.replace(/^\| /, '').replace(/ \|$/, '').split(' | ');
+                  return parts.map(c => ({data: c.replace(/[✅❌⏭]/g, '').trim()}));
+                })
+              ])
+              .write();
+
+            try {
+              if (context.eventName === 'pull_request') {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.issue.number,
+                  body: comment,
+                });
+              } else {
+                await github.rest.repos.createCommitComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  commit_sha: context.sha,
+                  body: comment,
+                });
+              }
+            } catch (e) {
+              core.warning(`Could not post comment (token may lack write access): ${e.message}`);
+            }

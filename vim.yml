@@ -1,0 +1,9 @@
+# Neovim standard library for selene.
+# Referenced from selene.toml via `std = "vim"`. Extends the built-in Lua 5.1
+# library and declares the `vim` global as `any` so selene accepts `vim.*`
+# access while still linting other undefined variables.
+base: lua51
+
+globals:
+  vim:
+    any: true
