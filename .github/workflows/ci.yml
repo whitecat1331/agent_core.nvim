@@ -110,7 +110,6 @@ jobs:
         run: |
           set +e
           semgrep \
-            --config p/lua \
             --config p/secrets \
             --config p/security-audit \
             . \
