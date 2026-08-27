@@ -6,14 +6,37 @@
 
 local M = {}
 
---- Detect the project root: git root if available, otherwise cwd.
-function M.root()
-  local cwd = vim.fn.getcwd()
-  local ok, out = pcall(vim.fn.systemlist, { "git", "-C", cwd, "rev-parse", "--show-toplevel" })
+--- Detect the project root for an arbitrary directory: git root if available,
+--- otherwise the nearest ancestor containing a .git directory, otherwise the
+--- directory itself.
+---@param dir string
+---@return string
+function M.root_for(dir)
+  dir = dir or vim.fn.getcwd()
+  local ok, out = pcall(vim.fn.systemlist, { "git", "-C", dir, "rev-parse", "--show-toplevel" })
   if ok and out and #out > 0 and out[1] ~= "" and vim.fn.isdirectory(out[1]) == 1 then
     return out[1]:gsub("[\r\n]", "")
   end
-  return cwd
+
+  -- Walk up to the nearest .git directory (handles subdirectories inside a repo
+  -- and shallow worktrees where rev-parse might be unavailable).
+  local cur = vim.fn.fnamemodify(dir, ":p"):gsub("[\\/]+$", "")
+  while cur ~= "" do
+    if vim.fn.isdirectory(cur .. "/.git") == 1 then
+      return cur
+    end
+    local parent = vim.fn.fnamemodify(cur, ":h")
+    if parent == cur then
+      break
+    end
+    cur = parent
+  end
+  return vim.fn.fnamemodify(dir, ":p"):gsub("[\\/]+$", "")
+end
+
+--- Detect the active project root: git root if available, otherwise cwd.
+function M.root()
+  return M.root_for(vim.fn.getcwd())
 end
 
 function M.brief_path()
@@ -115,10 +138,13 @@ local function is_excluded(rel, excluded)
   return false
 end
 
---- Flat list of relative file paths (git-aware with find fallback).
-function M.file_list()
+--- Flat list of relative file paths for an arbitrary root (git-aware with find
+--- fallback).
+---@param root string
+---@return string[]
+function M.file_list_for(root)
   local cfg = require("agent_core").config
-  local r = M.root()
+  local r = root or M.root()
 
   local ok, out = pcall(vim.fn.systemlist, { "git", "-C", r, "ls-files" })
   if ok and out and vim.v.shell_error == 0 and #out > 0 then
@@ -156,6 +182,11 @@ function M.file_list()
   return res
 end
 
+--- Flat list of relative file paths for the active project root.
+function M.file_list()
+  return M.file_list_for(M.root())
+end
+
 local function language_counts(files)
   local counts = {}
   for _, f in ipairs(files) do
@@ -175,6 +206,26 @@ local function language_counts(files)
     return a.n > b.n
   end)
   return list
+end
+
+--- One-line structural summary for a root: top language counts. Used by the
+--- workspace registry; no full brief is required. Empty string when no files.
+---@param root string
+---@return string
+function M.summary_for(root)
+  local files = M.file_list_for(root)
+  if #files == 0 then
+    return ""
+  end
+  local langs = language_counts(files)
+  if #langs == 0 then
+    return "(" .. #files .. " files)"
+  end
+  local top = {}
+  for i = 1, math.min(3, #langs) do
+    top[#top + 1] = langs[i].lang
+  end
+  return table.concat(top, ", ") .. " (" .. #files .. " files)"
 end
 
 local function key_files(files)
