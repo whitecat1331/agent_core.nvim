@@ -51,6 +51,16 @@ function M.save_active(name)
   write(data)
 end
 
+function M.get_active_mode()
+  return read()["_active_mode"]
+end
+
+function M.save_active_mode(name)
+  local data = read()
+  data["_active_mode"] = name
+  write(data)
+end
+
 --- Prompt the user to store a key for a profile (used when a profile requires
 --- a key but none is stored yet).
 function M.prompt(profile)
