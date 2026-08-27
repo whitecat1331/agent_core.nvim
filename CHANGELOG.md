@@ -8,6 +8,42 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Cursor-style behavior modes (`ask`, `plan`, `debug`, `agent`, `multi-task`)
+  with `:AgentMode` / `<leader>am`, per-mode tool policy (read-only vs full),
+  dynamic auto-approve (all tools minus `destructive_tools`), and startup
+  restore.
+- `agent_core.multitask` `run_agent` tool: write-capable parallel subagents on
+  avante's agent loop, with an optional `tools` allowlist and detached git
+  worktree isolation.
+- `get_mode_prompt()` export and `modes` / `destructive_tools` config keys.
+- Mode-realm recommendation: hybrid classification (offline keyword heuristic
+  + one-shot LLM fallback) hooked into avante's `AvanteInputSubmitted` event,
+  with an interactive Switch/Ignore prompt, `:AgentRecommend` and
+  `:AgentRecommendToggle` commands, and a `recommend` config block. Modes now
+  carry `keywords` and `when_to_use` realm hints.
+- Agent autoswitch (provider/model router): hybrid classification against
+  profile strengths (`keywords` / `when_to_use` / `autoswitch` fields), an
+  interactive Switch/Ignore prompt, `:AgentAutoSwitch` / `:AgentAutoSwitchToggle`
+  commands and `<leader>ao` keymap, a `Claude` profile, and an `autoswitch`
+  config block.
+- `agent_core.coordinator`: merges simultaneous mode + profile recommendations
+  into a single prompt (`Switch both` / `Switch mode only` / `Switch profile
+  only` / `Ignore`) instead of two sequential prompts.
+- Workspace registry (`agent_core.workspace`): persistently register multiple
+  project roots and switch between them, with a compact index
+  (`get_workspace_prompt()`) injected into the system prompt, plus
+  `:AgentWorkspaceAdd` / `:AgentWorkspaceRemove` / `:AgentWorkspaceScan` /
+  `:AgentWorkspaceList` / `:AgentWorkspaceSwitch` commands and `<leader>aW` /
+  `<leader>aw` / `<leader>aj` keymaps.
+- Multi-root MCP indexing (`agent_core.mcp_index`): manages the global
+  `~/.config/mcphub/servers.json` to register `ripvec` (native multi-root via a
+  `root` parameter) and one `semnav-<slug>` server per supported project, runs a
+  one-time `semnav index`, and stops tracked daemons on `VimLeavePre`.
+- Generalized indexer helpers `root_for(dir)`, `file_list_for(root)`, and
+  `summary_for(root)` so any directory can be rooted and summarized.
+
 ## [0.1.0] - 2026-08-26
 
 ### Added

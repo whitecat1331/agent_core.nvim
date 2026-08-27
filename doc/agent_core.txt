@@ -9,15 +9,21 @@ CONTENTS                                                      *agent_core*
   4. Configuration ................ |agent_core-config|
   5. Project brief ................ |agent_core-brief|
   6. Profiles ..................... |agent_core-profiles|
-  7. MCP indexing ................. |agent_core-mcp|
+  7. Modes ........................ |agent_core-modes|
+  8. Multi-task subagents ......... |agent_core-multitask|
+  9. Mode recommendation .......... |agent_core-recommend|
+ 10. Agent autoswitch ............ |agent_core-autoswitch|
+ 11. MCP indexing ................. |agent_core-mcp|
+ 12. Workspace registry ........... |agent_core-workspace|
 
 ==============================================================================
 1. INTRODUCTION                                     *agent_core-intro*
 
-agent_core bundles agent/key profiles with one-key switching, an indexer that
-generates a committable project brief (AVANTE.md), and a two-tier context
-strategy: the brief is always injected into the system prompt, while deep
-semantic/structural context is pulled on demand via MCP tools.
+agent_core bundles agent/key profiles with one-key switching, Cursor-style
+behavior modes (ask/plan/debug/agent/multi-task), an indexer that generates a
+committable project brief (AVANTE.md), and a two-tier context strategy: the
+brief is always injected into the system prompt, while deep semantic/structural
+context is pulled on demand via MCP tools.
 
 ==============================================================================
 2. INSTALLATION                                     *agent_core-install*
@@ -39,6 +45,10 @@ With lazy.nvim: >
 :AgentSwitch    Pick an agent/key profile and apply it.
                 Default keymap: <leader>aP
 
+                                                *:AgentMode*
+:AgentMode      Pick a behavior mode (ask/plan/debug/agent/multi-task) and
+                apply it. Default keymap: <leader>am
+
                                                 *:AgentIndex*
 :AgentIndex     Regenerate the project brief (AVANTE.md) for the current repo.
                 Default keymap: <leader>aI
@@ -46,6 +56,49 @@ With lazy.nvim: >
                                                 *:AgentProfile*
 :AgentProfile   Show the active agent profile.
                 Default keymap: <leader>ap
+
+                                                *:AgentRecommend*
+:AgentRecommend [prompt]
+                Recommend a mode for a prompt. With no argument, uses the
+                current visual selection, then falls back to an input prompt.
+
+                                                *:AgentRecommendToggle*
+:AgentRecommendToggle
+                Enable/disable automatic mode recommendation.
+
+                                                *:AgentAutoSwitch*
+:AgentAutoSwitch [prompt]
+                Recommend an agent profile for a prompt. With no argument, uses
+                the current visual selection, then falls back to an input
+                prompt. Default keymap: <leader>ao
+
+                                                *:AgentAutoSwitchToggle*
+:AgentAutoSwitchToggle
+                Enable/disable automatic agent routing.
+
+                                                *:AgentWorkspaceAdd*
+:AgentWorkspaceAdd [path]
+                Add a project to the workspace registry. With no argument,
+                uses the current directory. Default keymap: <leader>aW
+
+                                                *:AgentWorkspaceRemove*
+:AgentWorkspaceRemove
+                Remove a project from the workspace registry (picker).
+
+                                                *:AgentWorkspaceScan*
+:AgentWorkspaceScan [parent]
+                Scan a folder for git repos and register each. With no
+                argument, uses config.workspace.scan_parent or the cwd.
+
+                                                *:AgentWorkspaceList*
+:AgentWorkspaceList
+                List registered workspace projects.
+                Default keymap: <leader>aw
+
+                                                *:AgentWorkspaceSwitch*
+:AgentWorkspaceSwitch
+                Switch to a registered workspace project (picker).
+                Default keymap: <leader>aj
 
 ==============================================================================
 4. CONFIGURATION                                    *agent_core-config*
@@ -55,9 +108,34 @@ Call |agent_core.setup()| with an optional table to override defaults: >
   require("agent_core").setup({
     brief_filename = "AVANTE.md",
     semnav_bin = "semnav",
+    ripvec_bin = "ripvec-mcp",
     brief_prompt_max_chars = 8000,
     refresh_debounce_ms = 5000,
     profiles = nil,
+    modes = nil,
+    recommend = {
+      enabled = true,
+      confidence_threshold = 0.6,
+      use_llm_fallback = true,
+      min_prompt_length = 8,
+    },
+    autoswitch = {
+      enabled = true,
+      confidence_threshold = 0.6,
+      use_llm_fallback = true,
+      min_prompt_length = 8,
+    },
+    workspace = {
+      enabled = true,
+      registry_dir = nil,
+      scan_parent = nil,
+      prompt_max_chars = 6000,
+      auto_index_on_add = true,
+      auto_index_on_scan = true,
+    },
+    destructive_tools = {
+      "delete_path", "move_path", "write_global_file", "run_python", "git_commit",
+    },
     excluded_dirs = { ".git", "node_modules", ".venv", "vendor" },
   })
 <
@@ -65,6 +143,15 @@ Call |agent_core.setup()| with an optional table to override defaults: >
 get_brief_prompt()                              *agent_core.get_brief_prompt()*
   Returns the project brief text to inject into the system prompt, or "" when
   no brief exists. Bounded by |brief_prompt_max_chars|.
+
+get_mode_prompt()                                *agent_core.get_mode_prompt()*
+  Returns the active mode persona text to inject into the system prompt, or ""
+  when no mode is set.
+
+get_workspace_prompt()                    *agent_core.get_workspace_prompt()*
+  Returns the compact multi-root workspace index to inject into the system
+  prompt, or "" when no projects are registered. Bounded by
+  |workspace.prompt_max_chars|.
 
 ==============================================================================
 5. PROJECT BRIEF                                    *agent_core-brief*
@@ -84,12 +171,101 @@ API keys are resolved env-first: profile.api_key > os.getenv(api_key_name) >
 agent_keys.json (0600). Never put real keys in profiles.lua.
 
 ==============================================================================
-7. MCP INDEXING                                     *agent_core-mcp*
+7. MODES                                            *agent_core-modes*
 
-ripvec (semantic + BM25 + LSP search) is registered globally. semnav (LSP
-semantic graph) is opted in per project: :AgentIndex detects a supported
-language and writes the project .mcphub/servers.json, then runs a one-time
-`semnav index`. Tracked daemons are stopped on VimLeavePre.
+A mode is orthogonal to a profile: profiles pick the model/API key, modes pick
+the behavior. Each mode bundles a persona, a tool policy, and an auto-approve
+policy:
+
+  ask        read-only Q&A
+  plan       read-only research + produce a plan
+  agent      full tools, auto-approve everything except destructive_tools
+  debug      full tools, runtime-evidence bugfixing
+  multi-task full tools, parallel fan-out via run_agent
+
+Read-only modes keep read/search tools but disable every mutating tool. Full
+modes auto-approve (all tools) minus destructive_tools. The active mode is
+persisted and restored on startup.
+
+==============================================================================
+8. MULTI-TASK SUBAGENTS                            *agent_core-multitask*
+
+agent_core.multitask exposes run_agent_tool(), a write-capable subagent tool
+for avante's custom_tools. Emit multiple run_agent tool calls in one message to
+run subagents concurrently. The tool accepts prompt (required), an optional
+tools allowlist, and an optional worktree flag that isolates the subagent in a
+detached git worktree.
+
+==============================================================================
+9. MODE RECOMMENDATION                            *agent_core-recommend*
+
+agent_core listens for avante's AvanteInputSubmitted event and classifies each
+prompt against the active mode's realm. If the prompt is out of scope (e.g.
+"implement this feature" in ask, "fix this bug" in plan), it suggests switching
+to the best-fit mode with a Switch/Ignore prompt.
+
+Classification is hybrid: a fast offline keyword heuristic runs first; for
+low-confidence prompts a one-shot LLM classification goes through avante's own
+client, degrading gracefully to the heuristic on failure or timeout.
+
+Modes carry two realm-hint fields in lua/agent_core/modes.lua: keywords
+(weighted phrases; { "phrase", 2 } for stronger signals) and when_to_use (the
+one-line reason shown in the prompt). The active mode's read_only flag also
+boosts full-write modes when an imperative edit verb is detected.
+
+Config lives under |agent_core-config| recommend = { ... }.
+
+==============================================================================
+10. AGENT AUTOSWITCH                              *agent_core-autoswitch*
+
+agent_core also classifies each AvanteInputSubmitted prompt against profile
+strengths (keywords) and, when a different provider/model is a better fit,
+offers a Switch/Ignore prompt. Profiles expose keywords (weighted phrases),
+when_to_use (the reason shown), and autoswitch = false to exclude a profile
+from routing (the local Ollama model is excluded).
+
+Routing is hybrid: a fast offline keyword heuristic runs first, and a one-shot
+LLM classification goes through avante's own client for low-confidence prompts,
+degrading gracefully to the heuristic on failure.
+
+Default strengths: DeepSeek (cloud) for general coding, Gemini for fast /
+long-context / multimodal work, Claude for architecture / security / reasoning.
+Config lives under |agent_core-config| autoswitch = { ... }.
+
+When the mode recommender and the autoswitch both fire on the same prompt,
+agent_core.coordinator merges them into a single prompt with Switch both /
+Switch mode only / Switch profile only / Ignore options.
+
+==============================================================================
+11. MCP INDEXING                                    *agent_core-mcp*
+
+ripvec (semantic + BM25 + LSP search) is natively multi-root: its retrieval
+tools accept a `root` parameter and lazily index that root. semnav (LSP
+semantic graph) is strictly per-root, so agent_core registers one semnav-<slug>
+MCP server per registered project that supports a semnav language
+(Go/Rust/JS/Python), and runs a one-time `semnav index` when a graph DB is
+missing. mcphub starts servers lazily (auto_toggle_mcp_servers), so N projects
+do not spawn N daemons at startup; tracked daemons are stopped on VimLeavePre.
+
+agent_core manages the global ~/.config/mcphub/servers.json, preserving
+non-agent_core servers and recomputing only its own ripvec + semnav-* keys.
+
+==============================================================================
+12. WORKSPACE REGISTRY                            *agent_core-workspace*
+
+The workspace registry persists multiple project roots so the agent can search
+and reason across several repos. Entries are { path, name, summary, added_at }
+stored in <data>/agent_core/workspace.json — structural metadata only, never
+file contents or secrets.
+
+Use :AgentWorkspaceAdd (current dir or a path), :AgentWorkspaceScan (git repos
+under a parent folder), :AgentWorkspaceRemove, :AgentWorkspaceList, and
+:AgentWorkspaceSwitch (cd into a project). The registry is injected into the
+system prompt via |agent_core.get_workspace_prompt()|: a compact index of name,
+path, and one-line summary per project. The active project keeps its full
+brief; other projects are searched on demand via MCP (see |agent_core-mcp|).
+
+Config lives under |agent_core-config| workspace = { ... }.
 
 ==============================================================================
 vim:tw=78:ts=2:sw=2:et:ft=help:norl:
