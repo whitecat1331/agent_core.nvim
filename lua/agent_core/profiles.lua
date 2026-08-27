@@ -3,6 +3,11 @@ local M = {}
 --- Default profiles. Each bundles provider + model + API key + optional persona.
 --- `api_key_name` is the env var avante reads; never put real keys here (they
 --- live in agent_keys.json, managed by agent_core.keys).
+---
+--- Realm hints used by agent_core.autoswitch to route a prompt to the best
+--- profile: `keywords` (weighted phrases; `{ "phrase", 2 }` for stronger
+--- signals), `when_to_use` (one-line reason for the switch prompt), and
+--- `autoswitch` (false = excluded from automatic routing).
 M.defaults = {
   {
     name = "DeepSeek (cloud)",
@@ -10,12 +15,35 @@ M.defaults = {
     model = "deepseek-chat",
     api_key_name = "DEEPSEEK_API_KEY",
     description = "Main coding model via DeepSeek cloud",
+    autoswitch = true,
+    keywords = {
+      { "implement", 2 },
+      { "build", 2 },
+      "add",
+      "create",
+      "write",
+      "refactor",
+      "fix",
+      "bug",
+      "test",
+      "code",
+      "edit",
+      "update",
+      "change",
+      "rename",
+      "delete",
+      "migrate",
+    },
+    when_to_use = "general coding: implementing, building, and editing code end-to-end",
   },
   {
     name = "DeepSeek (local)",
     provider = "ollama",
     model = "deepseek-coder:1.3b",
     description = "Local Ollama deepseek-coder (offline)",
+    -- Excluded from automatic routing: never silently send real work to the
+    -- 1.3b local model. Select it manually via :AgentSwitch when offline.
+    autoswitch = false,
   },
   {
     name = "Gemini",
@@ -23,6 +51,42 @@ M.defaults = {
     model = "gemini-2.0-flash",
     api_key_name = "GEMINI_API_KEY",
     description = "Google Gemini Flash",
+    autoswitch = true,
+    keywords = {
+      { "summarize", 2 },
+      "summarise",
+      "document",
+      "explain",
+      "image",
+      "screenshot",
+      "visual",
+      "diagram",
+      "translate",
+      "long context",
+      "research",
+    },
+    when_to_use = "fast, long-context, or multimodal work: summaries, explanations, images, and research",
+  },
+  {
+    name = "Claude",
+    provider = "claude",
+    model = "claude-sonnet-4-5-20250929",
+    api_key_name = "ANTHROPIC_API_KEY",
+    description = "Anthropic Claude Sonnet",
+    autoswitch = true,
+    keywords = {
+      { "architecture", 2 },
+      { "design", 2 },
+      { "security", 2 },
+      { "audit", 2 },
+      { "review", 2 },
+      "reason",
+      "complex",
+      "plan",
+      "analyze",
+      "trade-off",
+    },
+    when_to_use = "deep reasoning, architecture, security review, and complex analysis",
   },
 }
 
