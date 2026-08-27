@@ -6,5 +6,16 @@
 --
 --   nvim --headless -u tests/minimal_init.lua \
 --     "+lua require('agent_core').setup(); print('AGENT_CORE_SMOKE_OK')" +qa
+--
+-- `check_smoke_nvim` also asserts the :AgentMode command, the get_mode_prompt /
+-- modes.all APIs, the multitask.run_agent_tool export, and the recommend module
+-- (heuristic_classify maps "fix the bug" -> debug, "implement login" -> agent,
+-- "explain this code" -> ask) plus the autoswitch module (heuristic_classify
+-- maps "implement the login feature" -> "DeepSeek (cloud)", "summarize this
+-- long document" -> Gemini, "review the security and architecture" -> Claude)
+-- and the coordinator module (present/evaluate exist). It also asserts the
+-- workspace/mcp_index modules (get_workspace_prompt, write_global, index_all,
+-- and the indexer root_for/file_list_for/summary_for helpers) plus the five
+-- :AgentWorkspace* commands.
 
 vim.opt.runtimepath:prepend(vim.fn.getcwd())
