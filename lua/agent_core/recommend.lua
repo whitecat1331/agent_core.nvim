@@ -74,6 +74,11 @@ end
 local function score_modes(ltext)
   local modes = get_modes()
   local active = modes.get_active()
+
+  -- Policy mode-preference bonus (0 when policy is unavailable).
+  local ok_pol, Policy = pcall(require, "agent_core.policy")
+  local pol = ok_pol and Policy.apply() or nil
+
   local scored = {}
   for _, mode in ipairs(modes.all()) do
     local score = 0
@@ -98,6 +103,11 @@ local function score_modes(ltext)
           break
         end
       end
+    end
+
+    -- Policy bias (ask_first -> plan/ask; good -> plan).
+    if pol then
+      score = score + pol.mode_bonus(mode.name)
     end
 
     scored[#scored + 1] = { mode = mode.name, score = score }
@@ -130,6 +140,12 @@ end
 --- @param text string
 --- @param cb fun(mode: string|nil)
 function M.llm_classify(text, cb)
+  -- Short-circuit when the active policy forbids cloud classification.
+  local ok_pol, Policy = pcall(require, "agent_core.policy")
+  if ok_pol and not Policy.apply().classifier_allowed then
+    cb(nil)
+    return
+  end
   local ok_llm, Llm = pcall(require, "avante.llm")
   if not ok_llm or not Llm.curl then
     cb(nil)

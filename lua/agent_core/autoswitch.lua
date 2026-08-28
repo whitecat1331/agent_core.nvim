@@ -56,21 +56,51 @@ local function routable_names()
   return names
 end
 
+--- Policy weight for a profile under the active policy. Returns -math.huge when
+--- the profile is filtered out (trust scope or hard filter), 0 when the policy
+--- or registry is unavailable (degrade to keyword-only scoring), otherwise the
+--- numeric policy score.
+---@param profile_name string
+---@return number
+local function policy_bonus(profile_name)
+  local ok_pol, Policy = pcall(require, "agent_core.policy")
+  if not ok_pol then
+    return 0
+  end
+  local ok_reg, Registry = pcall(require, "agent_core.registry")
+  if not ok_reg then
+    return 0
+  end
+  local entry = Registry.find(profile_name)
+  if not entry then
+    return 0
+  end
+  return Policy.apply().score(entry)
+end
+
 --- Score a lowercased prompt against every routable profile's keywords.
+--- A profile is only considered when at least one keyword matched; the policy
+--- bonus then re-ranks among the matched profiles (and trust/hard filters drop
+--- profiles entirely).
 --- @param ltext string lowercased prompt
 --- @return {profile: string, score: number}[] sorted descending by score
 local function score_profiles(ltext)
   local scored = {}
   for _, p in ipairs(get_profiles().all()) do
     if p.autoswitch ~= false then
-      local score = 0
-      for _, k in ipairs(p.keywords or {}) do
-        local phrase, weight = norm_keyword(k)
-        if phrase and phrase ~= "" and ltext:find(phrase, 1, true) then
-          score = score + weight
+      local bonus = policy_bonus(p.name)
+      if bonus > -1e15 then
+        local kw = 0
+        for _, k in ipairs(p.keywords or {}) do
+          local phrase, weight = norm_keyword(k)
+          if phrase and phrase ~= "" and ltext:find(phrase, 1, true) then
+            kw = kw + weight
+          end
+        end
+        if kw > 0 then
+          scored[#scored + 1] = { profile = p.name, score = kw + bonus }
         end
       end
-      scored[#scored + 1] = { profile = p.name, score = score }
     end
   end
 
@@ -101,6 +131,13 @@ end
 --- @param text string
 --- @param cb fun(profile: string|nil)
 function M.llm_classify(text, cb)
+  -- Short-circuit when the active policy forbids cloud classification (it
+  -- would send prompt content to an external host).
+  local ok_pol, Policy = pcall(require, "agent_core.policy")
+  if ok_pol and not Policy.apply().classifier_allowed then
+    cb(nil)
+    return
+  end
   local ok_llm, Llm = pcall(require, "avante.llm")
   if not ok_llm or not Llm.curl then
     cb(nil)
