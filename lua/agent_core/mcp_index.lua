@@ -30,36 +30,33 @@ end
 --- Resolve the semnav binary to an absolute path when possible.
 local function semnav_bin()
   local cfg = require("agent_core").config
-  local bin = cfg.semnav_bin or "semnav"
-  if not bin:match("^/") and not bin:match("^%a:[/\\]") then
-    local resolved = vim.fn.exepath(bin)
-    if resolved and resolved ~= "" then
-      bin = resolved
-    end
-  end
-  return bin
+  return require("agent_core.platform").resolve_bin(cfg.semnav_bin or "semnav")
 end
 
 --- Resolve the ripvec MCP binary to an absolute path when possible.
 local function ripvec_bin()
   local cfg = require("agent_core").config
-  local bin = cfg.ripvec_bin or "ripvec-mcp"
-  if not bin:match("^/") and not bin:match("^%a:[/\\]") then
-    local resolved = vim.fn.exepath(bin)
-    if resolved and resolved ~= "" then
-      bin = resolved
-    end
-  end
-  return bin
+  return require("agent_core.platform").resolve_bin(cfg.ripvec_bin or "ripvec-mcp")
 end
 
---- Global servers.json path.
+--- Global servers.json path. Best-effort: track mcphub's own resolved config
+--- (which the user may override via mcphub.setup), falling back to mcphub's
+--- default location (identical on Linux, macOS, and Windows).
 function M.global_servers_path()
+  local ok, hub = pcall(require, "mcphub.config")
+  if ok and type(hub) == "table" then
+    local ok2, path = pcall(function()
+      return hub.config
+    end)
+    if ok2 and type(path) == "string" and path ~= "" then
+      return path
+    end
+  end
   return vim.fn.expand("~/.config/mcphub/servers.json")
 end
 
 --- Unique, filesystem-safe slug for a project root.
-local function slug_for(root)
+function M.slug_for(root)
   local name = root:match("([^/\\]+)$") or root
   name = name:lower()
   name = name:gsub("[^%w%-]", "-")
@@ -135,7 +132,7 @@ function M.write_global()
   for _, p in ipairs(get_workspace().list()) do
     local files = idx.file_list_for(p.path)
     if idx.supports_semnav(files) then
-      local slug = slug_for(p.path)
+      local slug = M.slug_for(p.path)
       servers[slug] = {
         command = semnav_bin(),
         args = { "serve", p.path },
