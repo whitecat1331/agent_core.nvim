@@ -1,0 +1,213 @@
+---@mod agent_core.catalog_snapshot Bundled model catalog snapshot (curated data).
+---@brief [[
+--- The shipped, trusted snapshot of non-derivable model metadata: per-token
+--- cost, benchmark-derived quality_score, authoritative fim/insert_template and
+--- reasoning flags, context window, and a latency hint. This is the fallback
+--- that makes first-run setup work with zero network; `agent_core.catalog`
+--- overlays a fetched (user-refreshed) catalog on top for freshness.
+---
+--- Numeric values are curated priors, not exact or authoritative — the policy
+--- layer treats them as starting weights and the health router measures real
+--- latency at runtime. See agent_core.catalog for the field allowlist that
+--- prevents a fetched catalog from overriding security-relevant fields
+--- (api_key_name / endpoint / trust / name / roles).
+---@brief ]]
+
+return {
+  version = 1,
+  ---@type {provider:string, model:string, name:string|nil, api_key_name:string|nil,
+  ---       roles:string[]|nil, trust:string|nil, cost_in_per_1m:number|nil,
+  ---       cost_out_per_1m:number|nil, context_window:number|nil, fim:boolean|nil,
+  ---       insert_template:boolean|nil, reasoning:boolean|nil,
+  ---       quality_score:number|nil, latency_hint:string|nil}[]
+  models = {
+    -- Anthropic
+    {
+      provider = "claude",
+      model = "claude-sonnet-4-5-20250929",
+      name = "Claude",
+      api_key_name = "ANTHROPIC_API_KEY",
+      roles = { "primary", "classifier" },
+      trust = "third-party-cloud",
+      cost_in_per_1m = 3.0,
+      cost_out_per_1m = 15.0,
+      context_window = 200000,
+      fim = false,
+      insert_template = false,
+      reasoning = true,
+      vision = true,
+      quality_score = 0.86,
+      latency_hint = "low",
+    },
+    {
+      provider = "claude",
+      model = "claude-haiku-4-5-20251001",
+      name = "Claude Haiku",
+      api_key_name = "ANTHROPIC_API_KEY",
+      roles = { "primary", "classifier" },
+      trust = "third-party-cloud",
+      cost_in_per_1m = 1.0,
+      cost_out_per_1m = 5.0,
+      context_window = 200000,
+      fim = false,
+      insert_template = false,
+      reasoning = false,
+      quality_score = 0.62,
+      latency_hint = "low",
+    },
+
+    -- OpenAI
+    {
+      provider = "openai",
+      model = "gpt-4o",
+      name = "GPT-4o",
+      api_key_name = "OPENAI_API_KEY",
+      roles = { "primary", "classifier" },
+      trust = "third-party-cloud",
+      cost_in_per_1m = 2.5,
+      cost_out_per_1m = 10.0,
+      context_window = 128000,
+      fim = false,
+      insert_template = false,
+      reasoning = false,
+      vision = true,
+      quality_score = 0.80,
+      latency_hint = "low",
+    },
+    {
+      provider = "openai",
+      model = "gpt-4o-mini",
+      name = "GPT-4o mini",
+      api_key_name = "OPENAI_API_KEY",
+      roles = { "primary", "classifier" },
+      trust = "third-party-cloud",
+      cost_in_per_1m = 0.15,
+      cost_out_per_1m = 0.6,
+      context_window = 128000,
+      fim = false,
+      insert_template = false,
+      reasoning = false,
+      vision = true,
+      quality_score = 0.55,
+      latency_hint = "low",
+    },
+
+    -- Google
+    {
+      provider = "gemini",
+      model = "gemini-2.0-flash",
+      name = "Gemini",
+      api_key_name = "GEMINI_API_KEY",
+      roles = { "primary", "classifier" },
+      trust = "third-party-cloud",
+      cost_in_per_1m = 0.1,
+      cost_out_per_1m = 0.4,
+      context_window = 1048576,
+      fim = false,
+      insert_template = false,
+      reasoning = false,
+      vision = true,
+      quality_score = 0.65,
+      latency_hint = "low",
+    },
+    {
+      provider = "gemini",
+      model = "gemini-2.5-pro",
+      name = "Gemini 2.5 Pro",
+      api_key_name = "GEMINI_API_KEY",
+      roles = { "primary", "classifier" },
+      trust = "third-party-cloud",
+      cost_in_per_1m = 1.25,
+      cost_out_per_1m = 10.0,
+      context_window = 1048576,
+      fim = false,
+      insert_template = false,
+      reasoning = true,
+      vision = true,
+      quality_score = 0.82,
+      latency_hint = "medium",
+    },
+
+    -- DeepSeek cloud
+    {
+      provider = "deepseek",
+      model = "deepseek-chat",
+      name = "DeepSeek (cloud)",
+      api_key_name = "DEEPSEEK_API_KEY",
+      roles = { "primary", "classifier" },
+      trust = "third-party-cloud",
+      cost_in_per_1m = 0.27,
+      cost_out_per_1m = 1.1,
+      context_window = 128000,
+      fim = false,
+      insert_template = false,
+      reasoning = false,
+      quality_score = 0.72,
+      latency_hint = "medium",
+    },
+    {
+      provider = "deepseek",
+      model = "deepseek-reasoner",
+      name = "DeepSeek Reasoner",
+      api_key_name = "DEEPSEEK_API_KEY",
+      roles = { "primary", "classifier" },
+      trust = "third-party-cloud",
+      cost_in_per_1m = 0.55,
+      cost_out_per_1m = 2.19,
+      context_window = 128000,
+      fim = false,
+      insert_template = false,
+      reasoning = true,
+      quality_score = 0.74,
+      latency_hint = "medium",
+    },
+
+    -- Local Ollama (FIM-capable). Base deepseek-coder is FIM-trained but its
+    -- Ollama package has no insert template, so it must be aliased first.
+    {
+      provider = "ollama",
+      model = "deepseek-coder:1.3b",
+      name = "DeepSeek (local)",
+      roles = { "completion", "edit" },
+      trust = "local",
+      cost_in_per_1m = 0,
+      cost_out_per_1m = 0,
+      context_window = 16384,
+      fim = true,
+      insert_template = false, -- requires a deepseek-coder-fim:* alias
+      reasoning = false,
+      quality_score = 0.35,
+      latency_hint = "low",
+    },
+    {
+      provider = "ollama",
+      model = "qwen2.5-coder:7b",
+      name = "Qwen2.5-Coder 7B",
+      roles = { "completion", "edit" },
+      trust = "local",
+      cost_in_per_1m = 0,
+      cost_out_per_1m = 0,
+      context_window = 32768,
+      fim = true,
+      insert_template = true,
+      reasoning = false,
+      quality_score = 0.60,
+      latency_hint = "medium",
+    },
+    {
+      provider = "ollama",
+      model = "codellama:7b",
+      name = "CodeLlama 7B",
+      roles = { "completion", "edit" },
+      trust = "local",
+      cost_in_per_1m = 0,
+      cost_out_per_1m = 0,
+      context_window = 16384,
+      fim = true,
+      insert_template = true,
+      reasoning = false,
+      quality_score = 0.42,
+      latency_hint = "medium",
+    },
+  },
+}

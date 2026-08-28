@@ -6,14 +6,37 @@
 
 local M = {}
 
---- Detect the project root: git root if available, otherwise cwd.
-function M.root()
-  local cwd = vim.fn.getcwd()
-  local ok, out = pcall(vim.fn.systemlist, { "git", "-C", cwd, "rev-parse", "--show-toplevel" })
+--- Detect the project root for an arbitrary directory: git root if available,
+--- otherwise the nearest ancestor containing a .git directory, otherwise the
+--- directory itself.
+---@param dir string
+---@return string
+function M.root_for(dir)
+  dir = dir or vim.fn.getcwd()
+  local ok, out = pcall(vim.fn.systemlist, { "git", "-C", dir, "rev-parse", "--show-toplevel" })
   if ok and out and #out > 0 and out[1] ~= "" and vim.fn.isdirectory(out[1]) == 1 then
     return out[1]:gsub("[\r\n]", "")
   end
-  return cwd
+
+  -- Walk up to the nearest .git directory (handles subdirectories inside a repo
+  -- and shallow worktrees where rev-parse might be unavailable).
+  local cur = vim.fn.fnamemodify(dir, ":p"):gsub("[\\/]+$", "")
+  while cur ~= "" do
+    if vim.fn.isdirectory(cur .. "/.git") == 1 then
+      return cur
+    end
+    local parent = vim.fn.fnamemodify(cur, ":h")
+    if parent == cur then
+      break
+    end
+    cur = parent
+  end
+  return vim.fn.fnamemodify(dir, ":p"):gsub("[\\/]+$", "")
+end
+
+--- Detect the active project root: git root if available, otherwise cwd.
+function M.root()
+  return M.root_for(vim.fn.getcwd())
 end
 
 function M.brief_path()
@@ -63,7 +86,6 @@ local KEY_FILES = {
   "README",
   "AGENTS.md",
   "CLAUDE.md",
-  "CURSOR.md",
   "AVANTE.md",
   "WORKFLOW.md",
   "COMMIT_CONVENTION.md",
@@ -115,10 +137,13 @@ local function is_excluded(rel, excluded)
   return false
 end
 
---- Flat list of relative file paths (git-aware with find fallback).
-function M.file_list()
+--- Flat list of relative file paths for an arbitrary root (git-aware with find
+--- fallback).
+---@param root string
+---@return string[]
+function M.file_list_for(root)
   local cfg = require("agent_core").config
-  local r = M.root()
+  local r = root or M.root()
 
   local ok, out = pcall(vim.fn.systemlist, { "git", "-C", r, "ls-files" })
   if ok and out and vim.v.shell_error == 0 and #out > 0 then
@@ -132,31 +157,31 @@ function M.file_list()
     return res
   end
 
-  local ok2, out2 = pcall(vim.fn.systemlist, {
-    "find",
-    r,
-    "-type",
-    "f",
-    "-not",
-    "-path",
-    "*/.git/*",
-  })
-  if not ok2 or not out2 or vim.v.shell_error ~= 0 then
+  -- Portable fallback: recursive glob (no POSIX-only `find`).
+  local prefix = r:gsub("\\", "/") .. "/"
+  local out2 = vim.fn.glob(prefix .. "**/*", false, true)
+  if not out2 or #out2 == 0 then
     return {}
   end
-  local prefix = r:gsub("\\", "/") .. "/"
   local res = {}
   for _, line in ipairs(out2) do
-    local rel = line:gsub("\\", "/"):gsub("^" .. vim.pesc(prefix), "")
-    rel = rel:gsub("[\r\n]", "")
-    if rel ~= "" and not is_excluded(rel, cfg.excluded_dirs) then
-      table.insert(res, rel)
+    if vim.fn.isdirectory(line) ~= 1 then
+      local rel = line:gsub("\\", "/"):gsub("^" .. vim.pesc(prefix), "")
+      rel = rel:gsub("[\r\n]", "")
+      if rel ~= "" and not is_excluded(rel, cfg.excluded_dirs) then
+        table.insert(res, rel)
+      end
     end
   end
   return res
 end
 
-local function language_counts(files)
+--- Flat list of relative file paths for the active project root.
+function M.file_list()
+  return M.file_list_for(M.root())
+end
+
+function M.language_counts(files)
   local counts = {}
   for _, f in ipairs(files) do
     local ext = f:match("%.([%w]+)$")
@@ -175,6 +200,26 @@ local function language_counts(files)
     return a.n > b.n
   end)
   return list
+end
+
+--- One-line structural summary for a root: top language counts. Used by the
+--- workspace registry; no full brief is required. Empty string when no files.
+---@param root string
+---@return string
+function M.summary_for(root)
+  local files = M.file_list_for(root)
+  if #files == 0 then
+    return ""
+  end
+  local langs = M.language_counts(files)
+  if #langs == 0 then
+    return "(" .. #files .. " files)"
+  end
+  local top = {}
+  for i = 1, math.min(3, #langs) do
+    top[#top + 1] = langs[i].lang
+  end
+  return table.concat(top, ", ") .. " (" .. #files .. " files)"
 end
 
 local function key_files(files)
@@ -219,9 +264,10 @@ local function detect_commands(files)
     return false
   end
 
+  local AND = require("agent_core.platform").shell_and()
   local cmds = {}
   if has("go.mod") then
-    table.insert(cmds, "go mod tidy && go run .")
+    table.insert(cmds, "go mod tidy " .. AND .. " go run .")
     table.insert(cmds, "go test ./...")
   end
   if has("package.json") then
@@ -249,7 +295,7 @@ end
 function M.assemble(files)
   local root = M.root()
   local name = root:match("([^/]+)$") or root
-  local langs = language_counts(files)
+  local langs = M.language_counts(files)
   local keys = key_files(files)
   local entries = top_level_entries(files)
   local cmds = detect_commands(files)
@@ -348,14 +394,7 @@ end
 --- regardless of the parent process PATH).
 local function semnav_bin()
   local cfg = require("agent_core").config
-  local bin = cfg.semnav_bin or "semnav"
-  if not bin:match("^/") then
-    local resolved = vim.fn.exepath(bin)
-    if resolved and resolved ~= "" then
-      bin = resolved
-    end
-  end
-  return bin
+  return require("agent_core.platform").resolve_bin(cfg.semnav_bin or "semnav")
 end
 
 --- True when any tracked file implies a semnav-supported language.

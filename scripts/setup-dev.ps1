@@ -1,4 +1,4 @@
-# Install the agent_core.nvim development toolchain (PowerShell / Windows / Cursor).
+# Install the agent_core.nvim development toolchain (PowerShell / Windows).
 $ErrorActionPreference = "Stop"
 
 function Install-CargoBin($Name) {

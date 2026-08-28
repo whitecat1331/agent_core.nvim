@@ -9,15 +9,49 @@ CONTENTS                                                      *agent_core*
   4. Configuration ................ |agent_core-config|
   5. Project brief ................ |agent_core-brief|
   6. Profiles ..................... |agent_core-profiles|
-  7. MCP indexing ................. |agent_core-mcp|
+  7. Modes ........................ |agent_core-modes|
+  8. Multi-task subagents ......... |agent_core-multitask|
+  9. Mode recommendation .......... |agent_core-recommend|
+ 10. Agent autoswitch ............ |agent_core-autoswitch|
+ 11. MCP indexing ................. |agent_core-mcp|
+ 12. Workspace registry ........... |agent_core-workspace|
+ 13. Web access ................... |agent_core-web|
+ 14. GitHub context ............... |agent_core-github|
+ 15. Notepads ..................... |agent_core-notepad|
+ 16. Rules auto-injection ......... |agent_core-rules|
+ 17. Best-of-n .................... |agent_core-bestofn|
+ 18. Plan mode .................... |agent_core-plan|
+ 19. Debug mode ................... |agent_core-debug|
+ 20. Checkpoints .................. |agent_core-checkpoint|
+ 21. Tab autocomplete ............. |agent_core-completion|
+ 22. Local Bugbot ................. |agent_core-bugbot|
+ 23. Agent memory ................. |agent_core-memory|
+ 24. Headless runner .............. |agent_core-runner|
+ 25. Lifecycle hooks .............. |agent_core-hooks|
+ 26. Platform support ............. |agent_core-platform|
+ 27. Real debugger (DAP bridge) .... |agent_core-dap|
+ 28. Model registry + policy ....... |agent_core-policy|
+ 29. Model catalog + setup wizard ... |agent_core-setup|
+ 30. Agent skills .................. |agent_core-skills|
+ 31. Import from another IDE ........ |agent_core-import|
+ 32. Auto context attach ........... |agent_core-context|
+ 33. Ask the user .................. |agent_core-ask|
+ 34. Session history ............... |agent_core-history|
+ 35. Automations ................... |agent_core-automation|
+ 36. Browser control ............... |agent_core-browser|
+ 37. Command palette ............... |agent_core-commands|
+ 38. Image input / vision ........... |agent_core-vision|
+ 39. Diff UX ........................ |agent_core-diff|
+ 40. Coordinated edits .............. |agent_core-edits|
 
 ==============================================================================
 1. INTRODUCTION                                     *agent_core-intro*
 
-agent_core bundles agent/key profiles with one-key switching, an indexer that
-generates a committable project brief (AVANTE.md), and a two-tier context
-strategy: the brief is always injected into the system prompt, while deep
-semantic/structural context is pulled on demand via MCP tools.
+agent_core bundles agent/key profiles with one-key switching, behavior
+modes (ask/plan/debug/agent/multi-task), an indexer that generates a
+committable project brief (AVANTE.md), and a two-tier context strategy: the
+brief is always injected into the system prompt, while deep semantic/structural
+context is pulled on demand via MCP tools.
 
 ==============================================================================
 2. INSTALLATION                                     *agent_core-install*
@@ -39,6 +73,10 @@ With lazy.nvim: >
 :AgentSwitch    Pick an agent/key profile and apply it.
                 Default keymap: <leader>aP
 
+                                                *:AgentMode*
+:AgentMode      Pick a behavior mode (ask/plan/debug/agent/multi-task) and
+                apply it. Default keymap: <leader>am
+
                                                 *:AgentIndex*
 :AgentIndex     Regenerate the project brief (AVANTE.md) for the current repo.
                 Default keymap: <leader>aI
@@ -46,6 +84,250 @@ With lazy.nvim: >
                                                 *:AgentProfile*
 :AgentProfile   Show the active agent profile.
                 Default keymap: <leader>ap
+
+                                                *:AgentRecommend*
+:AgentRecommend [prompt]
+                Recommend a mode for a prompt. With no argument, uses the
+                current visual selection, then falls back to an input prompt.
+
+                                                *:AgentRecommendToggle*
+:AgentRecommendToggle
+                Enable/disable automatic mode recommendation.
+
+                                                *:AgentAutoSwitch*
+:AgentAutoSwitch [prompt]
+                Recommend an agent profile for a prompt. With no argument, uses
+                the current visual selection, then falls back to an input
+                prompt. Default keymap: <leader>ao
+
+                                                *:AgentAutoSwitchToggle*
+:AgentAutoSwitchToggle
+                Enable/disable automatic agent routing.
+
+                                                *:AgentWorkspaceAdd*
+:AgentWorkspaceAdd [path]
+                Add a project to the workspace registry. With no argument,
+                uses the current directory. Default keymap: <leader>aW
+
+                                                *:AgentWorkspaceRemove*
+:AgentWorkspaceRemove
+                Remove a project from the workspace registry (picker).
+
+                                                *:AgentWorkspaceScan*
+:AgentWorkspaceScan [parent]
+                Scan a folder for git repos and register each. With no
+                argument, uses config.workspace.scan_parent or the cwd.
+
+                                                *:AgentWorkspaceList*
+:AgentWorkspaceList
+                List registered workspace projects.
+                Default keymap: <leader>aw
+
+                                                *:AgentWorkspaceSwitch*
+:AgentWorkspaceSwitch
+                Switch to a registered workspace project (picker).
+                Default keymap: <leader>aj
+
+                                                *:AgentNotepad*
+:AgentNotepad   Open a notepad (picker).
+                Default keymap: <leader>an
+
+                                                *:AgentNotepadNew*
+:AgentNotepadNew
+                Create a new notepad (prompts for a name).
+
+                                                *:AgentNotepadEdit*
+:AgentNotepadEdit
+                Edit a notepad (picker).
+
+                                                *:AgentNotepadDelete*
+:AgentNotepadDelete
+                Delete a notepad (picker).
+
+                                                *:AgentBestOfN*
+:AgentBestOfN [prompt]
+                Compare a prompt across multiple agent profiles and show the
+                outputs side-by-side. With no argument, uses the visual
+                selection, then falls back to an input prompt.
+                Default keymap: <leader>ab
+
+                                                *:AgentPlanBuild*
+:AgentPlanBuild [path]
+                Switch to agent mode and submit the current/latest plan as the
+                prompt ("Build"). With no argument, uses the active plan
+                or the most recently modified plan file. Default keymap:
+                <leader>aB
+
+                                                *:AgentPlanBuildNew*
+:AgentPlanBuildNew [path]
+                Like |:AgentPlanBuild|, but opens a fresh avante session
+                ("Build in New Agent").
+
+                                                *:AgentCheckpoint*
+:AgentCheckpoint [label]
+                Snapshot the working tree to a git patch checkpoint. With no
+                argument, uses the label "checkpoint". Default keymap:
+                <leader>ac
+
+                                                *:AgentRollback*
+:AgentRollback [label]
+                Restore a checkpoint by reversing its recorded patch
+                (git apply -R). With no argument, shows a picker of snapshots.
+
+                                                *:AgentDebugCleanup*
+:AgentDebugCleanup
+                Remove all recorded debug instrumentation.
+                Default keymap: <leader>ad
+
+                                                *:AgentDebugStart*
+:AgentDebugStart [config]
+                Launch a debug session (real debugger via nvim-dap) by config
+                name, or the default launch config for the current filetype.
+                Default keymap: <leader>aD
+
+                                                *:AgentDebugContinue*
+:AgentDebugContinue
+                Resume the current debug session.
+
+                                                *:AgentDebugStepOver*
+:AgentDebugStepOver
+                Step over the current line.
+
+                                                *:AgentDebugStepInto*
+:AgentDebugStepInto
+                Step into the current call.
+
+                                                *:AgentDebugStepOut*
+:AgentDebugStepOut
+                Step out of the current function.
+
+                                                *:AgentDebugStop*
+:AgentDebugStop
+                Terminate the current debug session.
+
+                                                *:AgentDebugStatus*
+:AgentDebugStatus
+                Show registered adapters, launch configs, and the latest
+                paused state.
+
+                                                *:AgentPredictEdit*
+:AgentPredictEdit [instruction]
+                Predictive edit: rewrite a window around the caret, grounded in
+                surrounding code, LSP diagnostics, and recent edits. Checkpoints
+                first, shows a diff, then applies. Default keymap: <leader>ae
+
+                                                *:AgentBugbot*
+:AgentBugbot [--autofix] [--base=X]
+                Local Bugbot: review the working tree (or a branch vs base) and
+                present a severity-ranked findings report. --autofix applies the
+                fixes in an isolated worktree and opens a PR. Default keymap:
+                <leader>ag
+
+                                                *:AgentMemory*
+:AgentMemory    Show persistent agent-written memory in a read-only buffer.
+                Default keymap: <leader>aM
+
+                                                *:AgentRun*
+:AgentRun [prompt]
+                Run one prompt headlessly and print the answer. With no
+                argument, prompts for input. Default keymap: <leader>aR
+
+                                                *:AgentPolicy*
+:AgentPolicy [alias|knob=value]
+                Show or set the model-selection policy. With no argument, opens
+                an alias picker. Accepts an alias name (e.g. "privacy",
+                "cautious") or a "knob=value" pair (e.g.
+                "model_policy=cheap"). Default keymap: <leader>ay
+
+                                                *:AgentRegistryList*
+:AgentRegistryList
+                List every model backend in the registry (roles, trust tier,
+                cost, quality tier, provider/model/endpoint).
+
+                                                *:AgentRegistryAdd*
+:AgentRegistryAdd name provider model endpoint [trust]
+                Add a remote model backend. trust defaults to "private-remote";
+                "third-party-cloud" triggers a one-time warning that code leaves
+                the machine.
+
+                                                *:AgentSetup*
+:AgentSetup     First-run setup wizard: detect env/keychain keys and local +
+                remote Ollama, show a reviewable form of every chat model,
+                collect missing keys, persist the enabled-provider set, and
+                optionally bootstrap policy + default profile from one AI call
+                (catalog tags only). Default keymap: <leader>aS
+
+                                                *:AgentCatalogUpdate*
+:AgentCatalogUpdate
+                Refresh the model catalog from config.catalog.url (falling back
+                to the bundled snapshot on failure).
+
+                                                *:AgentSkills*
+:AgentSkills    List every discovered agent skill (name, scope, description,
+                argument hint, path) in a read-only buffer.
+
+                                                *:AgentImport*
+:AgentImport    Import rules/skills from another IDE (Cursor or VSCode) into the
+                neutral .agent_core/ directories. Single-source and
+                non-destructive (existing files are never overwritten).
+
+                                                *:AgentSkill*
+:AgentSkill     Run a user-invocable skill (picker), collect its argument, and
+                show the invoked body. Default keymap: <leader>at
+
+                                                *:AgentCommands*
+:AgentCommands  List every discovered command-palette entry (name, trust, scope,
+                description, argv, path) in a read-only buffer.
+
+                                                *:AgentCommand*
+:AgentCommand   Pick a command from the palette, collect its required arguments,
+                and run it. Default keymap: <leader>aC
+
+                                                *:AgentNextLocation*
+:AgentNextLocation
+                Predict the next edit location and jump the caret there.
+                Default keymap: <leader>aL
+
+                                                *:AgentHistory*
+:AgentHistory   List prior agent sessions for resume (read-only buffer).
+                Default keymap: <leader>aH
+
+                                                *:AgentAutomationList*
+:AgentAutomationList
+                List scheduled automations. Default keymap: <leader>aA
+
+                                                *:AgentAutomationAdd*
+:AgentAutomationAdd [prompt]
+                Add a scheduled automation (prompts for a repeat interval).
+
+                                                *:AgentAutomationRemove*
+:AgentAutomationRemove
+                Remove a scheduled automation (picker).
+
+                                                *:AgentAutomationRun*
+:AgentAutomationRun
+                Run a scheduled automation now (picker).
+
+                                                *:AgentDiffApply*
+:AgentDiffApply Apply the accepted hunks of the currently open diff.
+                Default keymap: <leader>aa
+
+                                                *:AgentDiffAccept*
+:AgentDiffAccept
+                Accept the diff hunk under the caret.
+                Default keymap: <leader>aY
+
+                                                *:AgentDiffReject*
+:AgentDiffReject
+                Reject the diff hunk under the caret.
+                Default keymap: <leader>aN
+
+                                                *:AgentCoordinatedEdit*
+:AgentCoordinatedEdit
+                Apply a multi-file coordinated edit, starting from the symbol
+                under the caret. Gathers cross-file context, requests a JSON
+                edit set, validates paths, checkpoints, applies, and presents a
+                combined diff. Default keymap: <leader>aE
 
 ==============================================================================
 4. CONFIGURATION                                    *agent_core-config*
@@ -55,9 +337,177 @@ Call |agent_core.setup()| with an optional table to override defaults: >
   require("agent_core").setup({
     brief_filename = "AVANTE.md",
     semnav_bin = "semnav",
+    ripvec_bin = "ripvec-mcp",
     brief_prompt_max_chars = 8000,
     refresh_debounce_ms = 5000,
     profiles = nil,
+    modes = nil,
+    recommend = {
+      enabled = true,
+      confidence_threshold = 0.6,
+      use_llm_fallback = true,
+      min_prompt_length = 8,
+    },
+    autoswitch = {
+      enabled = true,
+      confidence_threshold = 0.6,
+      use_llm_fallback = true,
+      min_prompt_length = 8,
+    },
+    workspace = {
+      enabled = true,
+      registry_dir = nil,
+      scan_parent = nil,
+      prompt_max_chars = 6000,
+      auto_index_on_add = true,
+      auto_index_on_scan = true,
+    },
+    rules = {
+      enabled = true,
+      filenames = { "AGENTS.md", "CLAUDE.md" },
+      project_rules_dir = ".agent_core/rules",
+      user_rules_dir = nil, -- nil = <data>/agent_core/rules
+      prompt_max_chars = 8000,
+      auto_attach_globs = true, -- inject glob-scoped rules only when they match the active file
+    },
+    context = {
+      enabled = true,
+      max_lines = 200,
+      max_chars = 6000,
+      include_diagnostics = true,
+      include_selection = true,
+      include_buffer = true,
+    },
+    skills = {
+      enabled = true,
+      project_dir = ".agent_core/skills",
+      user_dir = nil,        -- nil = <data>/agent_core/skills
+      prompt_max_chars = 4000,
+    },
+    ask = {
+      enabled = true,
+    },
+    history = {
+      enabled = true,
+      dir = nil,             -- nil = avante history dir (probed) or <data>/agent_core/history
+    },
+    automation = {
+      enabled = true,
+      path = nil,            -- nil = <data>/agent_core/automations.json
+    },
+    browser = {
+      enabled = true,
+      bin = nil,             -- nil = auto-detect (npx playwright, else chrome/edge/chromium)
+    },
+    notepad = {
+      dir = nil,
+      prompt_max_chars = 3000,
+    },
+    bestofn = {
+      profiles = nil,
+      timeout_ms = 60000,
+    },
+    plan = {
+      dir = ".agent_core/plans",
+      build_switch_mode = true,
+    },
+    debug = {
+      log_file = nil,
+      log_cmd = nil,
+    },
+    dap = {
+      timeout_ms = 15000,
+      max_frames = 20,
+      max_variables = 100,
+      max_output_chars = 4000,
+    },
+    checkpoint = {
+      dir = nil,
+    },
+    completion = {
+      enabled = true,
+      provider = "ollama",
+      fim_model = "qwen2.5-coder:7b-instruct",
+      edit_model = nil,
+      edit_profile = nil,
+      ollama_endpoint = nil,
+      backends = nil,
+      max_tokens = 64,
+      debounce_ms = 150,
+      context_chars = 4096,
+      edit_context_lines = 60,
+      recent_edits = 5,
+    },
+    registry = {
+      path = nil,
+      ollama_endpoint = nil,
+      ollama_endpoints = nil, -- extra remote Ollama endpoints
+      setup_path = nil,       -- nil = <data>/agent_core/setup.json
+      auto_discover = true,
+    },
+    policy = {
+      model_policy = "balanced",
+      trust_scope = "any",
+      caution = "act_first",
+    },
+    catalog = {
+      url = nil,              -- nil = no fetch (bundled snapshot only)
+      path = nil,             -- nil = <data>/agent_core/catalog.json
+      auto_refresh = false,
+    },
+    setup = {
+      auto_prompt = true,     -- offer :AgentSetup on first load when unconfigured
+      bootstrap = true,       -- run the optional AI suggestion after save
+      bootstrap_profile = nil, -- nil = first keyed cloud profile, else local Ollama
+    },
+    bugbot = {
+      base = "main",
+      autofix = false,
+      review_profile = nil,
+      max_chunk_chars = 20000,
+      max_subagents = 4,
+      timeout_ms = 300000,
+    },
+    memory = {
+      path = nil,
+      prompt_max_chars = 2000,
+    },
+    -- Image generation + vision input (read_image tool).
+    image = {
+      endpoint = "https://api.openai.com/v1/images/generations",
+      model = "dall-e-3",
+      api_key_name = "OPENAI_API_KEY",
+      vision_profile = nil,      -- vision (image input) profile; nil = auto-detect
+      vision_model = nil,        -- override model for vision calls; nil = profile's model
+      max_image_bytes = 10 * 1024 * 1024,
+    },
+    -- Shared diff UX (per-hunk accept/reject) for every agent edit.
+    diff = {
+      enabled = true,
+      auto_checkpoint = true,    -- checkpoint before applying an edit
+    },
+    -- Multi-file coordinated edits (cross-file context + structured apply).
+    edits = {
+      enabled = true,
+      edit_profile = nil,        -- profile for edit requests; nil = active profile
+      edit_model = nil,          -- override model; nil = profile's model
+      max_files = 8,
+      max_chars = 20000,
+      context_files = 5,
+    },
+    runner = {
+      timeout_ms = 120000,
+    },
+    hooks = {
+      before_prompt = nil,
+      after_prompt = nil,
+      before_tool = nil,
+      after_tool = nil,
+      on_run_end = nil,
+    },
+    destructive_tools = {
+      "bash", "rollback", "checkpoint", "create_pr", "commit", "push", "bugbot",
+    },
     excluded_dirs = { ".git", "node_modules", ".venv", "vendor" },
   })
 <
@@ -65,6 +515,48 @@ Call |agent_core.setup()| with an optional table to override defaults: >
 get_brief_prompt()                              *agent_core.get_brief_prompt()*
   Returns the project brief text to inject into the system prompt, or "" when
   no brief exists. Bounded by |brief_prompt_max_chars|.
+
+get_mode_prompt()                                *agent_core.get_mode_prompt()*
+  Returns the active mode persona text to inject into the system prompt, or ""
+  when no mode is set.
+
+get_workspace_prompt()                    *agent_core.get_workspace_prompt()*
+  Returns the compact multi-root workspace index to inject into the system
+  prompt, or "" when no projects are registered. Bounded by
+  |workspace.prompt_max_chars|.
+
+get_context_prompt()                    *agent_core.get_context_prompt()*
+  Returns the auto-attached editor context block (open buffer window, visual
+  selection, LSP diagnostics) to inject into the system prompt, or "" when
+  empty. Bounded by |context.max_chars|.
+
+get_rules_prompt()                          *agent_core.get_rules_prompt()*
+  Returns the aggregated project + user rules block to inject into the system
+  prompt, or "" when no rule files exist. Bounded by |rules.prompt_max_chars|.
+
+get_notepad_prompt()                      *agent_core.get_notepad_prompt()*
+  Returns the compact notepad title index to inject into the system prompt, or
+  "" when no notes exist. Bounded by |notepad.prompt_max_chars|.
+
+get_memory_prompt()                      *agent_core.get_memory_prompt()*
+  Returns the compact agent-memory key index to inject into the system prompt,
+  or "" when no memories exist. Bounded by |memory.prompt_max_chars|.
+
+get_skills_prompt()                    *agent_core.get_skills_prompt()*
+  Returns the compact skill index (name + description + argument hint) to inject
+  into the system prompt, or "" when no skills exist. Bounded by
+  |skills.prompt_max_chars|.
+
+get_custom_tools()                        *agent_core.get_custom_tools()*
+  Returns every agent_core custom tool (run_agent, web, github, plan, debug,
+  checkpoint, bugbot, memory, skills, rules, ask, browser), each wrapped by
+  lifecycle hooks. Spread these into avante's `custom_tools` so wiring stays a
+  single loop.
+
+run(prompt, opts, cb)                              *agent_core.run()*
+  Runs one prompt headlessly and calls cb({ text=, error=, profile= }). opts may
+  set profile / mode / model / on_chunk. The local analog of a headless SDK
+  runtime and Automations.
 
 ==============================================================================
 5. PROJECT BRIEF                                    *agent_core-brief*
@@ -84,12 +576,725 @@ API keys are resolved env-first: profile.api_key > os.getenv(api_key_name) >
 agent_keys.json (0600). Never put real keys in profiles.lua.
 
 ==============================================================================
-7. MCP INDEXING                                     *agent_core-mcp*
+7. MODES                                            *agent_core-modes*
 
-ripvec (semantic + BM25 + LSP search) is registered globally. semnav (LSP
-semantic graph) is opted in per project: :AgentIndex detects a supported
-language and writes the project .mcphub/servers.json, then runs a one-time
-`semnav index`. Tracked daemons are stopped on VimLeavePre.
+A mode is orthogonal to a profile: profiles pick the model/API key, modes pick
+the behavior. Each mode bundles a persona, a tool policy, and an auto-approve
+policy:
+
+  ask        read-only Q&A
+  plan       read-only research + write a Markdown plan, then stop
+  agent      full tools, auto-approve everything except destructive_tools
+  debug      hypothesize -> instrument -> reproduce -> fix -> clean up
+  multi-task full tools, parallel fan-out via run_agent
+
+Read-only modes keep read/search tools but disable every mutating tool
+(bash, create, edit_file, insert, replace_in_file, str_replace, undo_edit,
+write_to_file, write_todos, plus the run_agent / plan / debug / checkpoint
+custom tools). A mode can whitelist write tools via allow_tools (plan
+allow-lists create_plan, update_plan, and write_todos); M.switch computes
+disabled = WRITE_TOOLS - allow_tools. Full modes auto-approve (all tools) minus
+destructive_tools. The active mode is persisted and restored on startup.
+
+Custom modes: pass `modes.extra = { ... }` to |agent_core.setup()| or write
+<data>/agent_core/modes.json (an array, or { "modes": [...] }) to add modes
+without replacing the built-ins. A custom mode is the same shape as a built-in
+(name, label, read_only, system_prompt, optional keywords / when_to_use /
+allow_tools) and appears in |:AgentMode| and mode recommendation. A plain array
+in `config.modes` is still a full replacement (back-compat).
+
+==============================================================================
+8. MULTI-TASK SUBAGENTS                            *agent_core-multitask*
+
+agent_core.multitask exposes run_agent_tool(), a write-capable subagent tool
+for avante's custom_tools. Emit multiple run_agent tool calls in one message to
+run subagents concurrently. The tool accepts prompt (required), an optional
+tools allowlist, and an optional worktree flag that isolates the subagent in a
+detached git worktree.
+
+==============================================================================
+9. MODE RECOMMENDATION                            *agent_core-recommend*
+
+agent_core listens for avante's AvanteInputSubmitted event and classifies each
+prompt against the active mode's realm. If the prompt is out of scope (e.g.
+"implement this feature" in ask, "fix this bug" in plan), it suggests switching
+to the best-fit mode with a Switch/Ignore prompt.
+
+Classification is hybrid: a fast offline keyword heuristic runs first; for
+low-confidence prompts a one-shot LLM classification goes through avante's own
+client, degrading gracefully to the heuristic on failure or timeout.
+
+Modes carry two realm-hint fields in lua/agent_core/modes.lua: keywords
+(weighted phrases; { "phrase", 2 } for stronger signals) and when_to_use (the
+one-line reason shown in the prompt). The active mode's read_only flag also
+boosts full-write modes when an imperative edit verb is detected.
+
+Config lives under |agent_core-config| recommend = { ... }.
+
+==============================================================================
+10. AGENT AUTOSWITCH                              *agent_core-autoswitch*
+
+agent_core also classifies each AvanteInputSubmitted prompt against profile
+strengths (keywords) and, when a different provider/model is a better fit,
+offers a Switch/Ignore prompt. Profiles expose keywords (weighted phrases),
+when_to_use (the reason shown), and autoswitch = false to exclude a profile
+from routing (the local Ollama model is excluded).
+
+Routing is hybrid: a fast offline keyword heuristic runs first, and a one-shot
+LLM classification goes through avante's own client for low-confidence prompts,
+degrading gracefully to the heuristic on failure.
+
+Default strengths: DeepSeek (cloud) for general coding, Gemini for fast /
+long-context / multimodal work, Claude for architecture / security / reasoning.
+Config lives under |agent_core-config| autoswitch = { ... }.
+
+When the mode recommender and the autoswitch both fire on the same prompt,
+agent_core.coordinator merges them into a single prompt with Switch both /
+Switch mode only / Switch profile only / Ignore options.
+
+==============================================================================
+11. MCP INDEXING                                    *agent_core-mcp*
+
+ripvec (semantic + BM25 + LSP search) is natively multi-root: its retrieval
+tools accept a `root` parameter and lazily index that root. semnav (LSP
+semantic graph) is strictly per-root, so agent_core registers one semnav-<slug>
+MCP server per registered project that supports a semnav language
+(Go/Rust/JS/Python), and runs a one-time `semnav index` when a graph DB is
+missing. mcphub starts servers lazily (auto_toggle_mcp_servers), so N projects
+do not spawn N daemons at startup; tracked daemons are stopped on VimLeavePre.
+
+agent_core manages the global ~/.config/mcphub/servers.json, preserving
+non-agent_core servers and recomputing only its own ripvec + semnav-* keys.
+
+==============================================================================
+12. WORKSPACE REGISTRY                            *agent_core-workspace*
+
+The workspace registry persists multiple project roots so the agent can search
+and reason across several repos. Entries are { path, name, summary, added_at }
+stored in <data>/agent_core/workspace.json — structural metadata only, never
+file contents or secrets.
+
+Use :AgentWorkspaceAdd (current dir or a path), :AgentWorkspaceScan (git repos
+under a parent folder), :AgentWorkspaceRemove, :AgentWorkspaceList, and
+:AgentWorkspaceSwitch (cd into a project). The registry is injected into the
+system prompt via |agent_core.get_workspace_prompt()|: a compact index of name,
+path, and one-line summary per project. The active project keeps its full
+brief; other projects are searched on demand via MCP (see |agent_core-mcp|).
+
+Config lives under |agent_core-config| workspace = { ... }.
+
+==============================================================================
+13. WEB ACCESS                                      *agent_core-web*
+
+agent_core.web exposes two read-only avante custom tools (wire into
+avante's custom_tools):
+
+  web_fetch    Retrieve an http(s) URL and return readable plain text.
+  web_search   Best-effort DuckDuckGo search returning titles, URLs, snippets.
+
+Both run through `curl` with a user agent and a hard timeout, are read-only,
+and are safe to auto-approve in full modes.
+
+==============================================================================
+14. GITHUB CONTEXT                                 *agent_core-github*
+
+agent_core.github exposes a single `github` custom tool that wraps the GitHub
+CLI (`gh`), plus `git` for commits/push. Actions:
+
+  pr <number>            Pull a PR and its comments.
+  issue <number>         Pull an issue and its comments.
+  search <query>         Search prs/issues/code/repos (search_type field).
+  create_pr <title>      Open a PR (body/base/head optional).
+  commit <message>       git add -A + git commit.
+  comment <number>       Comment on a PR (body required).
+  push                   Push the current branch.
+
+Read actions build an allowlisted `gh` subcommand (never an arbitrary shell
+string). Write actions (create_pr/commit/push) are explicit `gh`/`git`
+subcommands built from discrete arguments and are added to destructive_tools,
+so read-only modes cannot invoke them. Requires `gh` on PATH and an
+authenticated remote.
+
+==============================================================================
+15. NOTEPADS                                       *agent_core-notepad*
+
+agent_core.notepad stores user-authored markdown notes under
+<data>/agent_core/notepads/ and injects a compact title index via
+|agent_core.get_notepad_prompt()|. The model reads a note's full content on
+demand, so notes stay opt-in. Commands: |:AgentNotepad|, |:AgentNotepadNew|,
+|:AgentNotepadEdit|, |:AgentNotepadDelete|. Only titles are ever auto-injected,
+never full note content.
+
+==============================================================================
+16. RULES AUTO-INJECTION                          *agent_core-rules*
+
+agent_core.rules aggregates the instruction files agent-style editors honor —
+AGENTS.md / CLAUDE.md at the project root plus
+.agent_core/rules/*.mdc|md (project) and <data>/agent_core/rules/*.mdc|md (user) — into one
+bounded system-prompt block via |agent_core.get_rules_prompt()|, mirroring the
+rules hierarchy (project rules first, then user rules).
+
+Frontmatter is parsed: `description` and `globs` are surfaced in the injected
+heading, and `alwaysApply: false` (or a non-`always` type) injects only the
+rule's metadata as an on-demand note. With `rules.auto_attach_globs` on
+(default), a rule that carries `globs` is injected in full only when the active
+file matches one of them (`**/*.go`, `*.py`, ...); otherwise it is listed
+on-demand. The `read_rule` tool (in |agent_core.get_custom_tools()|) reads any
+rule's full body by label or file basename on demand.
+
+==============================================================================
+17. BEST-OF-N                                      *agent_core-bestofn*
+
+agent_core.bestofn fans one prompt out to N configured profiles and shows their
+outputs side-by-side in a read-only scratch buffer. Each profile is queried
+sequentially with its own provider/model/API key through avante's own client.
+|:AgentBestOfN| (or <leader>ab) runs the comparison. By default it runs every
+profile with autoswitch ~= false; override with `bestofn.profiles`. Set
+`bestofn.timeout_ms` to bound each model.
+
+==============================================================================
+18. PLAN MODE                                       *agent_core-plan*
+
+Plan mode produces a reviewable plan you approve before any code
+changes. agent_core.plan mirrors this with two custom tools and two commands:
+
+  create_plan(title, content)  Write a Markdown plan to config.plan.dir
+                               (default .agent_core/plans/) as <slug>-<date>.md.
+  update_plan(content[, path]) Rewrite the current plan in place.
+
+The plan persona instructs the model to research, ask clarifying questions and
+wait, then write the plan (exact file paths, an ordered "- [ ]" TODO checklist,
+and trade-offs) and stop — no code edits. |:AgentPlanBuild| switches to agent
+mode and submits the plan as the prompt ("Build"); |:AgentPlanBuildNew|
+opens a fresh avante session (best-effort "Build in New Agent"). Plan mode is
+read-only for repo code but allow_tools whitelists its own plan/todo tools.
+
+==============================================================================
+19. DEBUG MODE                                      *agent_core-debug*
+
+Debug mode instruments the failing path, asks you to reproduce, reads
+the resulting logs, fixes the root cause, then removes the scaffolding.
+agent_core.debug provides the same loop with three custom tools:
+
+  add_debug_instrumentation(file, text)
+      Record the exact snippet the model just inserted, into
+      <data>/agent_core/debug/<root>.json (data dir only, safe in all modes).
+  request_reproduction(steps)
+      Signal instrumentation is complete; the model then stops so you can
+      reproduce and paste the output.
+  remove_debug_instrumentation
+      Delete every recorded snippet by exact text match (idempotent; the real
+      fix is a separate edit, so cleanup never deletes it).
+
+|:AgentDebugCleanup| runs the same cleanup manually. The debug persona walks the
+6-step loop: (1) generate multiple hypotheses, (2) add instrumentation, (3)
+request reproduction and wait, (4) analyze the returned output, (5) make a
+focused fix, (6) verify and remove instrumentation. Runtime evidence is captured
+via an optional config.debug.log_file / log_cmd (read back by the model), so no
+long-running daemon is needed.
+
+==============================================================================
+20. CHECKPOINTS                                   *agent_core-checkpoint*
+
+Agent mode supports checkpoints so a bad change can be reverted.
+agent_core.checkpoint mirrors this without commits or stash:
+
+  checkpoint tool / :AgentCheckpoint [label]
+      Snapshot the working tree to <data>/agent_core/checkpoints/<label>.patch
+      via `git diff --binary` (tracked changes only).
+  rollback tool / :AgentRollback [label]
+      Reverse the recorded patch with `git apply -R` (a picker lists snapshots
+      when no label is given).
+
+The agent persona reminds the model to checkpoint before large or risky
+changes.
+
+==============================================================================
+21. TAB AUTOCOMPLETE                             *agent_core-completion*
+
+agent_core.completion closes the biggest remaining gap: Tab autocomplete
+that predicts code. Two pieces:
+
+  FIM insert      A blink.cmp source (require("agent_core.completion").blink_source(),
+                  or module = "agent_core.completion" in blink's providers) that
+                  streams a fill-in-the-middle completion from a local Ollama FIM
+                  model (default qwen2.5-coder:7b-instruct) via POST /api/generate.
+                  Cloud providers fall back to a completion prompt through
+                  |agent_core.run()|.
+
+                  NOTE: Ollama FIM requires an INSERT template ({{ .Suffix }}).
+                  qwen2.5-coder / codellama / starcoder2 / codegemma /
+                  deepseek-coder-v2 ship one; base deepseek-coder:6.7b / 1.3b
+                  do NOT (Ollama rejects `suffix` with "does not support insert").
+                  Build a `deepseek-coder-fim:*` alias with a modelfile (see the
+                  README) to use a local DeepSeek model. On CPU-only hosts a
+                  1.5b-class model is the right latency choice (~30 tok/s vs ~7
+                  tok/s for 6.7b).
+
+  Predictive edit |:AgentPredictEdit| rewrites a window around the caret,
+                  grounded in surrounding code, vim.diagnostic.get() diagnostics,
+                  and a buffer-local recent-edit log. It checkpoints first, shows
+                  the change in a diff split, and applies it — |:AgentRollback|
+                  undoes it.
+
+  Jump-in-file   |:AgentNextLocation| asks the edit model for the next edit
+                 location (a line number), clamps it to the buffer, and moves
+                 the caret there — the "jump" gesture after accepting a
+                 predictive edit.
+
+Wire the source in blink.cmp's sources.providers and set config.completion.* to
+pick the FIM model and endpoint.
+
+==============================================================================
+22. LOCAL BUGBOT                                  *agent_core-bugbot*
+
+agent_core.bugbot runs a local bug-review agent. |:AgentBugbot| captures the
+working-tree diff (git diff HEAD) or a branch diff (git diff <base>...HEAD), fans
+out to parallel review workers over diff chunks, and presents a severity-ranked
+report (file/line, explanation, suggestion). With --autofix it applies the fixes
+in an isolated new-branch git worktree, commits, pushes, and opens a PR via
+`gh pr create`. Write paths are destructive and gated on --autofix. The `bugbot`
+custom tool exposes the same review/autofix to the model.
+
+==============================================================================
+23. AGENT MEMORY                                  *agent_core-memory*
+
+agent_core.memory is agent-written, persistent memory — distinct from user-authored
+Notepads. The remember / recall / forget custom tools store facts in
+<data>/agent_core/memory.json and recall them in later runs. |agent_core.get_memory_prompt()|
+injects a compact key index (never values) into the system prompt. |:AgentMemory|
+opens a read-only view of everything stored.
+
+==============================================================================
+24. HEADLESS RUNNER                               *agent_core-runner*
+
+agent_core.runner runs a single agent headlessly and returns its final answer,
+so agents are scriptable from git hooks, cron, or `nvim --headless`:
+
+  require("agent_core").run("Fix the failing test", { mode = "debug" }, cb)
+
+|agent_core.run()| resolves a profile, assembles the same system prompt the
+interactive agent gets, and streams through avante's own client. |:AgentRun|
+runs it interactively. This is the local analog of a headless SDK runtime
+and Automations (which run on a cloud VM).
+
+==============================================================================
+25. LIFECYCLE HOOKS                                *agent_core-hooks*
+
+agent_core.hooks emits lifecycle events so users can extend agent_core with
+their own Lua. Set callbacks under config.hooks (or listen for the matching
+User autocmd):
+
+  before_prompt  AgentHookBeforePrompt  a prompt is submitted (avante input)
+  after_prompt   AgentHookAfterPrompt   right after submission
+  before_tool    AgentHookBeforeTool    an agent_core custom tool runs
+  after_tool     AgentHookAfterTool     an agent_core custom tool completes
+  on_run_end     AgentHookRunEnd        a headless run completes
+
+before/after_tool wrap agent_core custom tools only (wired through
+|agent_core.get_custom_tools()|); avante built-ins (bash, write_to_file) are
+not wrapped without an upstream avante fork.
+
+==============================================================================
+26. PLATFORM SUPPORT                            *agent_core-platform*
+
+agent_core is platform-agnostic and runs identically on Linux, macOS, and
+Windows. A shared agent_core.platform helper centralizes the OS-specific
+decisions:
+
+  is_windows()    true on native Windows Neovim
+  is_abs(path)    POSIX `/`, home `~`, drive `C:\`/`C:/`, and UNC `\\server`
+  resolve_bin(n)  absolute paths pass through; bare names use vim.fn.exepath
+  join(...)       join parts with forward slashes (portable on Windows)
+  shell_and()     `&&` on POSIX, `;` on Windows (brief build/test commands)
+  os_hint()       model-facing shell/path instructions (wired via
+                  |agent_core.get_os_hint()| into the system prompt)
+
+Binary resolution (curl, gh, semnav, ripvec-mcp) and the indexer's non-git
+file walk are portable; the mcphub servers.json path tracks mcphub's own
+resolved config.
+
+External CLIs used at runtime (resolved on PATH per-OS): git, curl (web +
+FIM completion), gh (GitHub tool), and semnav / ripvec-mcp (MCP indexing).
+
+==============================================================================
+27. REAL DEBUGGER (DAP BRIDGE)                     *agent_core-dap*
+
+agent_core.dap adds a genuine interactive debugger the AI drives end-to-end,
+giving the model real debugger event parity without forking avante. It is a
+thin, adapter-agnostic controller over nvim-dap: it speaks only nvim-dap's
+generic API, so every DAP adapter (codelldb, delve, debugpy, js-debug,
+java-debug, netcoredbg, one-small-step-for-vimkind, ...) is supported with no
+per-language code here.
+
+The model drives the debugger through custom tools (all wired via
+|agent_core.get_custom_tools()|):
+
+  debug_list_adapters    List adapters + launch configs for the buffer.
+  debug_start            Launch by config name or inline config; optional
+                         breakpoints; blocks until the first stop.
+  debug_set_breakpoint   Set a breakpoint at file:line (condition / logpoint /
+                         hit count).
+  debug_clear_breakpoint Clear one breakpoint or all.
+  debug_continue         Resume; blocks until the next stop or termination.
+  debug_step_over        Step over; block until the stop and return state.
+  debug_step_into        Step into; block until the stop and return state.
+  debug_step_out         Step out; block until the stop and return state.
+  debug_pause            Interrupt a running process.
+  debug_get_state        Non-blocking snapshot of the last stop + console output.
+  debug_get_variables    Expand a variablesReference into child variables.
+  debug_evaluate         Evaluate an expression in the paused frame.
+  debug_stop             Terminate the session.
+  debug_restart          Restart; block until the first stop.
+
+The blocking tools (debug_start, debug_continue, debug_step_*, debug_restart)
+issue the DAP command and HOLD their on_complete until the debugger actually
+stops, then return the full paused state (source line, stack frames, scopes,
+locals, and captured console output). Because avante feeds a tool_result back
+into the conversation, this is event-identical to an injected "paused"
+message — no avante rewrite required. The tools stay out of destructive_tools so
+the debug loop runs uninterrupted in full modes.
+
+The debug mode persona (|agent_core-modes|) now PREFERS the real debugger when
+an adapter is available for the language (discovered via debug_list_adapters):
+set breakpoints at hypotheses, launch, step, inspect, evaluate, find the root
+cause, and apply a minimal fix. When no adapter fits (hard-to-attach or non-DAP
+scenarios like timing/network/async races), it falls back to the instrumentation
+loop in |agent_core-debug|.
+
+nvim-dap is SOFT-REQUIRED: without it (or a debug adapter) the tools return a
+clear error and the instrumentation loop remains the fallback. Installing
+nvim-dap and the per-language adapters is user-side; agent_core supplies only
+the AI-facing controller.
+
+Adapter install (user config):
+
+  Go        nvim-dap-go + delve
+  Python    nvim-dap-python + debugpy
+  JS/Node   nvim-dap + mason (vscode-js-debug)
+  Rust/C/C++ nvim-dap + mason (codelldb)
+  Java      nvim-jdtls + java-debug
+  C#/.NET   nvim-dap + mason (netcoredbg)
+  Lua       one-small-step-for-vimkind
+
+Define dap.configurations per filetype in your config (read by
+debug_list_adapters and debug_start); e.g. for Go:
+
+  local dap = require("dap")
+  dap.configurations.go = {
+    { type = "go", name = "Debug file", request = "launch",
+      program = "${file}" },
+  }
+
+Commands: |:AgentDebugStart| (<leader>aD), |:AgentDebugContinue|,
+|:AgentDebugStepOver|, |:AgentDebugStepInto|, |:AgentDebugStepOut|,
+|:AgentDebugStop|, |:AgentDebugStatus|. Config lives under |agent_core-config|
+dap = { ... } (timeout_ms, max_frames, max_variables, max_output_chars).
+
+==============================================================================
+28. MODEL REGISTRY + POLICY                        *agent_core-policy*
+
+agent_core.registry is the single source of truth for every model backend nvim
+can reach. Each entry carries the role(s) it serves (primary for chat,
+completion/edit for Tab and edits, classifier for routing), a trust tier
+(local, private-remote, or third-party-cloud), and value tags (cost, latency,
+fim, reasoning, quality_tier, plus numeric cost_in_per_1m / cost_out_per_1m /
+quality_score / context_window from the catalog). Ollama models are
+auto-discovered from EVERY configured endpoint (`registry.ollama_endpoints`
+plus the loopback default; /api/tags), each stamped with its endpoint and trust
+tier (loopback = local, non-loopback = private-remote); remote backends are also
+declared via config.completion.backends or |:AgentRegistryAdd|. Each entry gets
+an `enabled` flag (persisted setup.json override wins over env/key presence).
+Exposed API: list(), for_role(role), by_trust(...), find(name), add(entry),
+remove(name), parse_ollama_tags(body, endpoint, trust), normalize(entry),
+entry_enabled(entry).
+
+agent_core.policy turns that registry into a selection policy from three
+ORTHOGONAL knobs (no flat presets):
+
+  model_policy  balanced (default) | fast | good | cheap   -- the iron triangle
+  trust_scope   any (default) | private | local            -- data sovereignty
+  caution       act_first (default) | ask_first            -- mutation behavior
+
+Named ALIASES compose all three at once (M.ALIASES): privacy = balanced +
+private + act_first; cautious = cheap + local + ask_first; question_first =
+balanced + any + ask_first; quality = good + any + act_first; speed = fast +
+any + act_first; cost_first = cheap + any + act_first.
+
+Everything else is DERIVED from the knobs so they cannot drift:
+  - classifier (autoswitch/recommend LLM fallback): disabled when trust_scope
+    excludes cloud or under cheap (classification would send prompt content out).
+  - destructive_tools: expanded (file mutations, run_agent, create_plan, ...)
+    only under ask_first -- see effective_destructive_tools().
+  - max_tokens: trimmed under cheap (see completion.effective_max_tokens()).
+  - mode bias: ask_first biases plan/ask; good biases plan.
+
+apply() returns the policy object consumed by autoswitch (filter + re-rank),
+recommend (mode bias), completion (backend selection), and modes
+(effective_destructive_tools). Selection order is strict: role capability ->
+policy filter/weights -> content rank -> health, so a policy can pick DIFFERENT
+models per role (e.g. local scope: local chat model + local FIM model +
+classifier disabled).
+
+Completion backends + health router (|agent_core-completion|):
+
+config.completion.backends (or auto-discovered Ollama models) is the FIM pool.
+The policy sets the allowed trust tier (hard, from trust_scope) and the
+preferred backend (weight, from model_policy); a health router walks candidates
+in policy order, picks the first reachable endpoint (/api/tags, short timeout),
+caches for 30s, and FAILS OVER to local when the preferred backend is down.
+On switch it warms the model (keep-alive) so the first keystroke is not cold.
+
+Commands: |:AgentPolicy| (<leader>ay), |:AgentRegistryList|, |:AgentRegistryAdd|.
+Config lives under |agent_core-config| registry = { ... } and policy = { ... }.
+
+==============================================================================
+29. MODEL CATALOG + SETUP WIZARD                    *agent_core-setup*
+
+agent_core.catalog is the single source of truth for the model metadata that
+cannot be derived at runtime: per-token cost (cost_in_per_1m / cost_out_per_1m),
+benchmark quality_score (0..1), authoritative fim / insert_template / reasoning
+flags, context_window, and latency_hint. These ship as a bundled, versioned
+snapshot (lua/agent_core/catalog_snapshot.lua) and can be refreshed from a
+pinned URL via |:AgentCatalogUpdate| (config.catalog.url). The policy scoring
+(|agent_core-policy|) uses these numeric fields directly — cheap weights
+-cost, good weights quality_score, fast weights latency_hint + measured latency
+— with a coarse-string fallback for unknown user models.
+
+SECURITY: a fetched catalog is untrusted remote input, so only non-security
+fields are accepted (cost_*, context_window, quality_score, fim,
+insert_template, reasoning, latency_hint, model list). It can never set
+api_key_name, endpoint, trust, name, or roles — a malicious/compromised catalog
+cannot make the wizard read an unexpected env var or point at a hostile endpoint.
+
+The registry AUGMENTS every declared chat profile with the catalog's numeric
+fields and additionally SURFACES catalog-only chat models (e.g. GPT-4o, Claude
+Haiku) whose key is present in the environment — the deterministic answer to
+"what other LLMs should I include".
+
+|:AgentSetup| (<leader>aS) is the plug-and-play entry point:
+  - detect() reports which providers have an env key or a stored key, and the
+    full Ollama endpoint set (local + declared remote).
+  - form_model() renders one row per chat-capable model (toggle, key presence,
+    derived cost/quality/trust tags), greyed when disabled.
+  - save() stores keys via agent_core.keys, persists the enabled-provider set to
+    <data>/agent_core/setup.json, records remote Ollama endpoints, re-derives
+    the default active profile (first keyed cloud model, else local), then
+    optionally bootstraps.
+  - bootstrap_suggest() makes ONE LLM call over catalog tags only (never key
+    values), returning { model_policy, trust_scope, caution, default_profile },
+    presented as Apply / Apply with edits / Skip and live-applied via
+    agent_core.policy + agent_core.profiles. With no AI it degrades to
+    balanced / any / act_first + the first keyed profile.
+
+The persisted setup.json `enabled` map WINS over live env detection, so a key
+added/removed from the environment after setup does not silently flip a profile;
+re-running |:AgentSetup| is the reconcile path. On a fresh install with no
+setup.json and no active profile, setup.auto_prompt offers the wizard on first
+load (headless-safe). Remote Ollama boxes (GPU hosts over VPN) are added via
+|:AgentRegistryAdd| or registry.ollama_endpoints; their models are stamped
+private-remote and auto-discover in the wizard.
+
+==============================================================================
+30. AGENT SKILLS                                    *agent_core-skills*
+
+agent_core.skills discovers reusable, self-contained procedures stored as
+SKILL.md files. Each skill has a small YAML frontmatter (name, description,
+argument-hint, user-invocable) plus a markdown body. Skills live under
+.agent_core/skills/<name>/SKILL.md (project) and
+<data>/agent_core/skills/<name>/SKILL.md (user).
+
+Only metadata is auto-injected: |agent_core.get_skills_prompt()| emits a compact
+index (name + description + argument hint) bounded by skills.prompt_max_chars.
+The model reads a skill's full body on demand with the `read_skill` tool (also
+returned by |agent_core.get_custom_tools()|), so skill bodies never bloat the
+prompt. |:AgentSkills| lists every discovered skill with its scope and path.
+
+Skills marked `user-invocable: true` are also user-runnable: |:AgentSkill|
+(<leader>at) opens a picker of invocable skills, collects the argument hint, and
+shows the invoked body (with `{{args}}` / `{arg}` placeholders substituted) for
+review. The `run_skill` tool lets the model do the same.
+
+Config lives under |agent_core-config| skills = { ... }.
+
+==============================================================================
+31. IMPORT FROM ANOTHER IDE                        *agent_core-import*
+
+agent_core.import migrates an existing third-party IDE setup into agent_core's
+neutral directories. It is the ONLY module that names source-IDE on-disk paths,
+and it is single-source (one IDE per run) and non-destructive (existing files
+are never overwritten).
+
+Cursor source:
+  .cursor/rules/*.mdc|md (project + user)  -> .agent_core/rules (project) /
+                                              <data>/agent_core/rules (user)
+  .cursor/skills/*/SKILL.md (project + user) -> .agent_core/skills /
+                                                <data>/agent_core/skills
+  CURSOR.md                                -> .agent_core/rules/ide_instructions.md
+  .cursorrules                             -> .agent_core/rules/legacy_instructions.md
+
+VSCode source (Copilot instructions only):
+  .github/copilot-instructions.md / copilot-instructions.md
+                                           -> .agent_core/rules/copilot_instructions.md
+
+Run |:AgentImport| and pick the source (Snacks picker when available, otherwise
+vim.ui.select).
+
+==============================================================================
+32. AUTO CONTEXT ATTACH                           *agent_core-context*
+
+agent_core.context builds a bounded `## Current context` system-prompt block
+from the editor's live state — the active buffer window around the caret, the
+current visual selection, and the LSP diagnostics for the buffer — so the agent
+sees your current file, selection, and linter errors without any manual
+@-mention. |agent_core.get_context_prompt()| is the export to wire into
+avante's system_prompt. It is bounded by |context.max_lines| / |context.max_chars|,
+and each part can be toggled via context.include_buffer / include_selection /
+include_diagnostics.
+
+==============================================================================
+33. ASK THE USER                                      *agent_core-ask*
+
+agent_core.ask exposes an `ask_user` tool (in |agent_core.get_custom_tools()|)
+so an agent can ask a clarifying question mid-task and wait for the answer
+instead of guessing. The question is surfaced through `vim.ui.input` and the
+answer is returned to the model; in a headless session (no UI) it fails fast
+with an actionable error so the agent can proceed with a documented assumption
+rather than hanging. Enabled by default (|agent_core-config| ask.enabled).
+
+==============================================================================
+34. SESSION HISTORY                                *agent_core-history*
+
+agent_core.history lists and loads prior avante chat sessions so you can resume
+them. |:AgentHistory| (<leader>aH) opens a read-only buffer listing session ids;
+`M.list(dir)` / `M.load(dir, id)` are the programmatic form. The store is the
+avante history directory (probed from `avante.history` when available, else
+<data>/agent_core/history), overridable via |agent_core-config| history.dir.
+
+==============================================================================
+35. AUTOMATIONS                                  *agent_core-automation*
+
+agent_core.automation persists recurring prompts to
+<data>/agent_core/automations.json and schedules them with a `vim.uv` timer, so a
+prompt can run on an interval (e.g. "every hour") — the local analog of
+recurring Automations. Each run goes through |agent_core-runner| (same system
+prompt as the interactive agent); the schedule survives restarts by re-arming
+from the persisted list on startup.
+
+Commands: |:AgentAutomationAdd| (prompt + optional repeat interval),
+|:AgentAutomationList| (<leader>aA), |:AgentAutomationRemove|,
+|:AgentAutomationRun|. Config lives under |agent_core-config| automation = { ... }.
+
+==============================================================================
+36. BROWSER CONTROL                               *agent_core-browser*
+
+agent_core.browser exposes three headless-browser tools (in
+|agent_core.get_custom_tools()|): `browser_open` (page title + final URL),
+`browser_screenshot` (PNG saved to a path), and `browser_snapshot` (readable
+page text). It uses Playwright (`npx playwright`) when available, else
+Chrome/Edge/Chromium headless; set |agent_core-config| browser.bin to force a
+specific CLI. Tools degrade to an actionable "browser unavailable" message
+rather than erroring, and screenshots are written under
+<data>/agent_core/screenshots/ by default.
+
+==============================================================================
+37. COMMAND PALETTE                               *agent_core-commands*
+
+agent_core.commands discovers curated shell commands stored as one file per
+command: `.agent_core/commands/<name>.cmd.md` (project, committed) and
+`<data>/agent_core/commands/<name>.cmd.md` (user-global). Each file has a small
+YAML frontmatter (name, description, trust, argv, args, required) plus an
+optional markdown body: >
+
+  ---
+  name: run-tests
+  description: Run the test suite
+  trust: safe
+  argv:
+    - pytest
+    - -q
+    - "{{pattern}}"
+  args:
+    - pattern
+  required:
+    - pattern
+  ---
+<
+
+The model invokes commands through a single constrained `run_command` tool (in
+|agent_core.get_custom_tools()|): it emits a short command ID plus typed `args`
+instead of generating a full free-form command string. The harness builds the
+`argv` array deterministically (never shell-interpolated), so commands are
+cheap, unambiguous, and injection-safe.
+
+`trust: safe` (default) commands are enumerated in the `run_command` tool and
+auto-approved. `trust: dangerous` commands are excluded from the tool and left
+to the approval-gated `bash` breakout. Only metadata is auto-injected:
+|agent_core.get_commands_prompt()| emits a compact index (name + description +
+args), bounded by `commands.prompt_max_chars`. |:AgentCommands| lists every
+command; |:AgentCommand| picks and runs one interactively.
+
+Config lives under |agent_core-config| commands = { ... }.
+
+==============================================================================
+38. IMAGE INPUT / VISION                            *agent_core-vision*
+
+agent_core.image exposes a `read_image` tool (in |agent_core.get_custom_tools()|)
+that reads an image file (relative to the project root or absolute), base64-
+encodes it, and sends it to a vision-capable profile for a description or a
+specific question. Resolve the profile explicitly with
+|agent_core-config| image.vision_profile, override just the model with
+image.vision_model, or let agent_core auto-pick the first enabled registry entry
+tagged `vision` (catalog models such as GPT-4o, Claude, Gemini, and Ollama
+vision models such as `llava` / `moondream`). The active profile is only used as
+a last resort when it is itself vision-capable — a text-only model is never
+silently sent an image; `read_image` fails with a clear error instead. Images
+larger than image.max_image_bytes are refused.
+
+agent_core.runner.llm_curl() now accepts an optional `images` list
+({ data, media_type }) and builds the multimodal array-form content avante
+expects, so image + text prompts work through agent_core's own paths (headless
+runner, automations, and custom tools). For interactive chat, image input is
+already handled by avante's attachment path: install img-clip.nvim
+(paste/drag-drop) and add the `Avante` filetype to render-markdown.nvim so
+pasted images render inline.
+
+==============================================================================
+39. DIFF UX                                        *agent_core-diff*
+
+agent_core.diff is the shared diff presenter every agent edit path funnels
+through — predictive edit, inline edit, coordinated edits, and bugbot autofix —
+so they all get the same review UX. It renders old/new lines as per-hunk chunks
+and lets you accept or reject each hunk before applying. The working tree is
+checkpointed first (|agent_core-config| diff.auto_checkpoint), so
+|:AgentRollback| undoes an applied edit (and a cancelled coordinated edit rolls
+back automatically).
+
+Commands: |:AgentDiffApply| (<leader>aa) applies the accepted hunks,
+|:AgentDiffAccept| (<leader>aY) accepts the hunk under the caret, and
+|:AgentDiffReject| (<leader>aN) rejects it. In the diff buffer, `a` toggles the
+hunk under the caret and `q` cancels. In a headless session (no UI) the
+presenter auto-accepts every hunk so scripted callers still get a deterministic
+apply.
+
+==============================================================================
+40. COORDINATED EDITS                              *agent_core-edits*
+
+agent_core.edits predicts and applies a coordinated change across several files
+at once — the multi-file "Tab v2" gesture. |:AgentCoordinatedEdit| (<leader>aE)
+starts from the symbol under the caret, gathers cross-file context (the current
+file plus up to |agent_core-config| edits.context_files ripgrep-matched files,
+bounded by edits.max_files / edits.max_chars), and asks an edit-capable profile
+to return a structured JSON edit set: >
+
+  [{ "path": "relative/path", "find": "exact text", "replace": "replacement" }]
+<
+
+Every path is validated to stay inside the repo root (absolute paths and `..`
+traversal are rejected) and each `find` must match a literal block in its file.
+The harness checkpoints, applies each edit, and presents a combined diff with
+accept (keep) / cancel (|:AgentRollback|). Configure the edit model with
+edits.edit_profile / edits.edit_model; edits.enabled disables the command.
 
 ==============================================================================
 vim:tw=78:ts=2:sw=2:et:ft=help:norl:

@@ -21,6 +21,7 @@ function M.pick_profile(cb)
     Snacks.pick({
       title = "Agent Profile",
       items = items,
+      layout = { preview = false },
       format = function(item)
         return { { item.text } }
       end,
@@ -46,6 +47,53 @@ function M.pick_profile(cb)
     local p = Profiles.find(choice)
     if p then
       cb(p)
+    end
+  end)
+end
+
+--- Open a picker to choose a mode, then invoke `cb(mode)`.
+function M.pick_mode(cb)
+  local Modes = require("agent_core.modes")
+  local modes = Modes.all()
+
+  local items = {}
+  for _, m in ipairs(modes) do
+    table.insert(items, {
+      text = string.format("%s  |  %s", m.label or m.name, m.read_only and "read-only" or "full"),
+      mode = m,
+    })
+  end
+
+  local ok, Snacks = pcall(require, "snacks.picker")
+  if ok and type(Snacks) == "table" and type(Snacks.pick) == "function" then
+    Snacks.pick({
+      title = "Agent Mode",
+      items = items,
+      layout = { preview = false },
+      format = function(item)
+        return { { item.text } }
+      end,
+      confirm = function(picker, item)
+        picker:close()
+        if item and item.mode then
+          cb(item.mode)
+        end
+      end,
+    })
+    return
+  end
+
+  local choices = {}
+  for _, m in ipairs(modes) do
+    table.insert(choices, m.name)
+  end
+  vim.ui.select(choices, { prompt = "Agent mode" }, function(choice)
+    if not choice then
+      return
+    end
+    local m = Modes.find(choice)
+    if m then
+      cb(m)
     end
   end)
 end

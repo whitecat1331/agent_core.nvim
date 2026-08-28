@@ -1,5 +1,5 @@
 # Enforce consistent line endings so shell scripts always run on WSL/Linux and
-# so git diffs stay clean across Windows (Cursor) and WSL (nvim) checkouts.
+# so git diffs stay clean across Windows and WSL (nvim) checkouts.
 * text=auto
 
 *.sh text eol=lf

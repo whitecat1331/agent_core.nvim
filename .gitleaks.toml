@@ -1,0 +1,15 @@
+# Extend the built-in gitleaks ruleset rather than replacing it.
+[extend]
+useDefault = true
+
+# detect-secrets stores SHA-1 hashes (hashed_secret) in .secrets.baseline, which
+# gitleaks' generic-api-key rule misreads as hex API keys. Allowlist only that
+# rule for that one file so real secrets are still caught everywhere else.
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "detect-secrets baseline contains only hashes, never plaintext secrets"
+paths = [
+  '''\.secrets\.baseline$''',
+]
