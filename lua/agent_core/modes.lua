@@ -1,4 +1,4 @@
----@mod agent_core.modes Cursor-style behavior modes (ask/plan/debug/agent/multitask)
+---@mod agent_core.modes Behavior modes (ask/plan/debug/agent/multitask)
 ---@brief [[
 --- A mode is orthogonal to a profile: profiles bundle provider/model/API key,
 --- modes bundle behavior (read-only vs full), tool permissions, and a persona.
@@ -13,22 +13,24 @@ local M = {}
 --- for ask/plan modes. Keep this in sync with avante's built-in tools and any
 --- custom tools that can change the filesystem.
 M.WRITE_TOOLS = {
+  -- avante built-ins that mutate the repo or session state
   "bash",
-  "run_python",
-  "git_commit",
-  "str_replace",
-  "write_to_file",
-  "insert",
-  "undo_edit",
+  "create",
   "edit_file",
-  "write_global_file",
-  "move_path",
-  "copy_path",
-  "delete_path",
-  "create_dir",
+  "insert",
+  "replace_in_file",
+  "str_replace",
+  "undo_edit",
+  "write_to_file",
   "write_todos",
-  -- agent_core.multitask custom tool (write-capable subagents)
+  -- agent_core custom tools that mutate state
   "run_agent",
+  "create_plan",
+  "update_plan",
+  "add_debug_instrumentation",
+  "remove_debug_instrumentation",
+  "checkpoint",
+  "rollback",
 }
 
 M.defaults = {
@@ -75,11 +77,21 @@ MODE: Ask — you are in a read-only question-and-answer mode.
       "outline",
     },
     when_to_use = "researching and producing a step-by-step implementation plan",
+    -- Plan mode stays read-only for repo code, but may write its own Markdown
+    -- artifact and a todo list. Reconciles with M.WRITE_TOOLS in M.switch.
+    allow_tools = { "create_plan", "update_plan", "write_todos", "read_todos" },
     system_prompt = [[
-MODE: Plan — you are in a read-only planning mode.
-- Research the codebase thoroughly and produce a concrete, step-by-step implementation plan.
-- Identify the exact files and changes needed, and call out trade-offs and risks.
-- Do NOT edit files or run mutating commands.]],
+MODE: Plan — you produce a reviewable implementation plan, not code changes.
+1. Research the codebase thoroughly: locate the relevant files and understand the existing architecture.
+2. Ask clarifying questions and WAIT for the user's answers before finalizing the plan.
+3. Write the plan to a Markdown file using the `create_plan` tool, with a title and content that includes:
+   - the exact file paths and the specific change for each file,
+   - an ordered, step-by-step TODO checklist (use "- [ ]" items),
+   - trade-offs and risks.
+4. If the approach changes, revise the file with the `update_plan` tool.
+5. After writing the plan, STOP. Do NOT edit code or run mutating commands; the user reviews the plan and
+   triggers the build separately.
+You may use read/search tools plus create_plan, update_plan, read_todos, and write_todos only.]],
   },
   {
     name = "agent",
@@ -104,7 +116,8 @@ MODE: Plan — you are in a read-only planning mode.
     system_prompt = [[
 MODE: Agent — autonomous build/edit mode.
 - Work through the task end-to-end: read, edit, and run commands as needed.
-- Make changes directly and verify them with tests or builds.]],
+- Make changes directly and verify them with tests or builds.
+- Before a large or risky change, take a `checkpoint` snapshot so you can `rollback` if it goes wrong.]],
   },
   {
     name = "debug",
@@ -128,9 +141,27 @@ MODE: Agent — autonomous build/edit mode.
     },
     when_to_use = "investigating a failure with runtime evidence and fixing the root cause",
     system_prompt = [[
-MODE: Debug — investigate failures with runtime evidence.
-- Reproduce the issue, gather evidence (errors, logs, diagnostics, tests), find the root cause, then fix it.
-- Prefer evidence over assumptions; add targeted logging or assertions only when necessary.]],
+MODE: Debug — find the root cause using a REAL debugger when one is available, and fall back to
+print-instrumentation only when no adapter fits. Prefer the interactive debugger loop:
+
+1. Explore the relevant files and generate MULTIPLE ranked hypotheses for the root cause.
+2. Call `debug_list_adapters` to discover available debug adapters and launch configs.
+   - If a usable adapter + launch config exist, drive the real debugger:
+     a. `debug_set_breakpoint` at the most likely failure sites for each hypothesis
+        (use conditions / hit conditions to skip noise).
+     b. `debug_start` (by config name or an inline config). It returns the paused state.
+     c. Inspect: `debug_step_over` / `debug_step_into` / `debug_step_out` to walk execution,
+        `debug_evaluate` to test expressions in the paused frame, `debug_get_variables` to expand
+        object/array values, and `debug_get_state` for the current snapshot + console output.
+     d. `debug_continue` to run to the next breakpoint. Repeat (b)-(d) to isolate the root cause.
+     e. When done, `debug_stop` to end the session.
+   - If NO usable adapter (or the bug is timing/network/async and hard to attach), use the
+     instrumentation loop: insert temporary log/print statements, record each with
+     `add_debug_instrumentation`, call `request_reproduction` to ask the user to reproduce, then
+     analyze `read_captured_logs` (or the user's pasted output).
+3. Apply a focused, minimal fix (a separate edit, not the instrumentation).
+4. Clean up: call `remove_debug_instrumentation` (instrumentation path) and/or `debug_stop`
+   (debugger path) once the fix is verified.]],
   },
   {
     name = "multitask",
@@ -157,9 +188,54 @@ MODE: Multi-task — parallelize work across subagents.
   },
 }
 
+--- User-defined custom modes, loaded from config `modes.extra` (array) plus
+--- `<data>/agent_core/modes.json` (an array, or `{ modes = [...] }`).
+---@return table[]
+function M.custom_modes()
+  local out = {}
+  local cfg = require("agent_core").config
+  local extra = cfg.modes and cfg.modes.extra
+  if type(extra) == "table" then
+    for _, m in ipairs(extra) do
+      out[#out + 1] = m
+    end
+  end
+  local path = vim.fn.stdpath("data") .. "/agent_core/modes.json"
+  if vim.fn.filereadable(path) == 1 then
+    local ok, data = pcall(vim.json.decode, table.concat(vim.fn.readfile(path), "\n"))
+    if ok and type(data) == "table" then
+      local list = data.modes or data
+      if type(list) == "table" then
+        for _, m in ipairs(list) do
+          out[#out + 1] = m
+        end
+      end
+    end
+  end
+  return out
+end
+
 function M.all()
   local cfg = require("agent_core").config
-  return cfg.modes or M.defaults
+  -- A plain array in `config.modes` is a full replacement (back-compat).
+  if type(cfg.modes) == "table" and cfg.modes[1] ~= nil then
+    return cfg.modes
+  end
+  local seen = {}
+  local out = {}
+  local function add(m)
+    if type(m) == "table" and m.name and not seen[m.name] then
+      seen[m.name] = true
+      out[#out + 1] = m
+    end
+  end
+  for _, m in ipairs(M.defaults) do
+    add(m)
+  end
+  for _, m in ipairs(M.custom_modes()) do
+    add(m)
+  end
+  return out
 end
 
 function M.find(name)
@@ -185,7 +261,7 @@ end
 
 --- Compute the auto-approve policy for a mode.
 --- - read_only -> false (read tools never prompt; write tools are disabled anyway)
---- - auto_approve == "all" -> true (full Cursor parity)
+--- - auto_approve == "all" -> true (full agent parity)
 --- - otherwise -> every tool except the destructive list
 ---@param mode table
 ---@param tools string[] all tool names currently registered by avante
@@ -197,7 +273,13 @@ function M.auto_approve(mode, tools)
     return true
   end
   local cfg = require("agent_core").config
-  local destructive = cfg.destructive_tools or {}
+  local destructive = nil
+  local ok_pol, Policy = pcall(require, "agent_core.policy")
+  if ok_pol and Policy.effective_destructive_tools then
+    destructive = Policy.effective_destructive_tools()
+  else
+    destructive = cfg.destructive_tools or {}
+  end
   local allow = {}
   for _, t in ipairs(tools) do
     if not vim.tbl_contains(destructive, t) then
@@ -233,7 +315,11 @@ function M.switch(mode)
 
   local disabled = {}
   if mode.read_only then
+    local allow = mode.allow_tools or {}
     disabled = vim.tbl_filter(function(t)
+      if vim.tbl_contains(allow, t) then
+        return false
+      end
       return vim.tbl_contains(M.WRITE_TOOLS, t)
     end, tools)
   end
