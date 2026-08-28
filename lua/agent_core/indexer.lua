@@ -86,7 +86,6 @@ local KEY_FILES = {
   "README",
   "AGENTS.md",
   "CLAUDE.md",
-  "CURSOR.md",
   "AVANTE.md",
   "WORKFLOW.md",
   "COMMIT_CONVENTION.md",
@@ -158,25 +157,20 @@ function M.file_list_for(root)
     return res
   end
 
-  local ok2, out2 = pcall(vim.fn.systemlist, {
-    "find",
-    r,
-    "-type",
-    "f",
-    "-not",
-    "-path",
-    "*/.git/*",
-  })
-  if not ok2 or not out2 or vim.v.shell_error ~= 0 then
+  -- Portable fallback: recursive glob (no POSIX-only `find`).
+  local prefix = r:gsub("\\", "/") .. "/"
+  local out2 = vim.fn.glob(prefix .. "**/*", false, true)
+  if not out2 or #out2 == 0 then
     return {}
   end
-  local prefix = r:gsub("\\", "/") .. "/"
   local res = {}
   for _, line in ipairs(out2) do
-    local rel = line:gsub("\\", "/"):gsub("^" .. vim.pesc(prefix), "")
-    rel = rel:gsub("[\r\n]", "")
-    if rel ~= "" and not is_excluded(rel, cfg.excluded_dirs) then
-      table.insert(res, rel)
+    if vim.fn.isdirectory(line) ~= 1 then
+      local rel = line:gsub("\\", "/"):gsub("^" .. vim.pesc(prefix), "")
+      rel = rel:gsub("[\r\n]", "")
+      if rel ~= "" and not is_excluded(rel, cfg.excluded_dirs) then
+        table.insert(res, rel)
+      end
     end
   end
   return res
@@ -187,7 +181,7 @@ function M.file_list()
   return M.file_list_for(M.root())
 end
 
-local function language_counts(files)
+function M.language_counts(files)
   local counts = {}
   for _, f in ipairs(files) do
     local ext = f:match("%.([%w]+)$")
@@ -217,7 +211,7 @@ function M.summary_for(root)
   if #files == 0 then
     return ""
   end
-  local langs = language_counts(files)
+  local langs = M.language_counts(files)
   if #langs == 0 then
     return "(" .. #files .. " files)"
   end
@@ -270,9 +264,10 @@ local function detect_commands(files)
     return false
   end
 
+  local AND = require("agent_core.platform").shell_and()
   local cmds = {}
   if has("go.mod") then
-    table.insert(cmds, "go mod tidy && go run .")
+    table.insert(cmds, "go mod tidy " .. AND .. " go run .")
     table.insert(cmds, "go test ./...")
   end
   if has("package.json") then
@@ -300,7 +295,7 @@ end
 function M.assemble(files)
   local root = M.root()
   local name = root:match("([^/]+)$") or root
-  local langs = language_counts(files)
+  local langs = M.language_counts(files)
   local keys = key_files(files)
   local entries = top_level_entries(files)
   local cmds = detect_commands(files)
@@ -399,14 +394,7 @@ end
 --- regardless of the parent process PATH).
 local function semnav_bin()
   local cfg = require("agent_core").config
-  local bin = cfg.semnav_bin or "semnav"
-  if not bin:match("^/") then
-    local resolved = vim.fn.exepath(bin)
-    if resolved and resolved ~= "" then
-      bin = resolved
-    end
-  end
-  return bin
+  return require("agent_core.platform").resolve_bin(cfg.semnav_bin or "semnav")
 end
 
 --- True when any tracked file implies a semnav-supported language.
