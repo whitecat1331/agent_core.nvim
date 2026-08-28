@@ -95,6 +95,23 @@ jobs:
         shell: bash
         run: bash .githooks/lib/checks.sh run_ci_smoke
 
+  tests:
+    name: Unit tests (headless nvim)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # actions/checkout@v4.2.2
+      - uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: stable
+      - name: Run unit test suite
+        shell: bash
+        run: bash .githooks/lib/checks.sh run_ci_tests
+
   semgrep:
     name: Semgrep (report-only)
     runs-on: ubuntu-latest
@@ -143,7 +160,7 @@ jobs:
   notify:
     name: Notify on Completion
     runs-on: ubuntu-latest
-    needs: [commits, security, gitleaks, lint, smoke, actionlint]
+    needs: [commits, security, gitleaks, lint, smoke, tests, actionlint]
     if: always()
     permissions:
       contents: write
@@ -157,7 +174,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const jobs = JSON.parse(process.env.NEEDS_JSON);
-            const blocking = ['commits', 'security', 'gitleaks', 'lint', 'smoke', 'actionlint'];
+            const blocking = ['commits', 'security', 'gitleaks', 'lint', 'smoke', 'tests', 'actionlint'];
             const blockingFailed = blocking.some(n => jobs[n] && ['failure', 'cancelled'].includes(jobs[n].result));
             const icon = blockingFailed ? '❌' : '✅';
             const statusLabel = blockingFailed ? 'Blocking checks failed' : 'All blocking checks passed';

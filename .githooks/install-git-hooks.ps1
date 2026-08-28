@@ -1,4 +1,4 @@
-# Install the agent_core.nvim git hooks (PowerShell / Windows / Cursor).
+# Install the agent_core.nvim git hooks (PowerShell / Windows).
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Push-Location $Root

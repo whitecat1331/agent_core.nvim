@@ -1,0 +1,36 @@
+---@mod tests.history_spec Unit tests for agent_core.history (pure list/load).
+
+local h = require("tests.harness")
+local History = require("agent_core.history")
+
+h.describe("history", function()
+  h.it("list returns entries from a directory", function()
+    local dir = vim.fn.tempname()
+    vim.fn.mkdir(dir, "p")
+    vim.fn.writefile({ "{}" }, dir .. "/a.json")
+    vim.fn.writefile({ "{}" }, dir .. "/b.json")
+    local entries = History.list(dir)
+    h.equals(2, #entries)
+    vim.fn.delete(dir, "rf")
+  end)
+
+  h.it("list returns empty for a missing directory", function()
+    h.equals(0, #History.list(vim.fn.tempname() .. "/nope"))
+  end)
+
+  h.it("load decodes a session and appends .json when needed", function()
+    local dir = vim.fn.tempname()
+    vim.fn.mkdir(dir, "p")
+    vim.fn.writefile({ '{"title":"hello"}' }, dir .. "/s1.json")
+    local data, err = History.load(dir, "s1")
+    h.equals(nil, err)
+    h.equals("hello", data.title)
+    vim.fn.delete(dir, "rf")
+  end)
+
+  h.it("load returns an error for a missing session", function()
+    local data, err = History.load(vim.fn.tempname(), "missing")
+    h.equals(nil, data)
+    h.truthy(err ~= nil, "missing session should error")
+  end)
+end)

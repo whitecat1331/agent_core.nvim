@@ -6,5 +6,33 @@
 --
 --   nvim --headless -u tests/minimal_init.lua \
 --     "+lua require('agent_core').setup(); print('AGENT_CORE_SMOKE_OK')" +qa
+--
+-- `check_smoke_nvim` also asserts the :AgentMode command, the get_mode_prompt /
+-- modes.all APIs, the multitask.run_agent_tool export, and the recommend module
+-- (heuristic_classify maps "fix the bug" -> debug, "implement login" -> agent,
+-- "explain this code" -> ask) plus the autoswitch module (heuristic_classify
+-- maps "implement the login feature" -> "DeepSeek (cloud)", "summarize this
+-- long document" -> Gemini, "review the security and architecture" -> Claude)
+-- and the coordinator module (present/evaluate exist). It also asserts the
+-- workspace/mcp_index modules (get_workspace_prompt, write_global, index_all,
+-- and the indexer root_for/file_list_for/summary_for helpers) plus the five
+-- :AgentWorkspace* commands, the web/github custom tools, the notepad and rules
+-- modules (get_notepad_prompt / get_rules_prompt), the four :AgentNotepad*
+-- commands, and the best-of-n module (run/present) plus the :AgentBestOfN
+-- command. It also asserts the plan module (write_plan/build/create_plan_tool/
+-- update_plan_tool) with :AgentPlanBuild/:AgentPlanBuildNew, the debug module
+-- (add/remove/request_reproduction tools) with :AgentDebugCleanup, the
+-- checkpoint module (create/rollback/checkpoint_tool/rollback_tool) with
+-- :AgentCheckpoint/:AgentRollback, and plan-mode allow_tools on the modes table.
+-- It also asserts the completion module (blink_source/inline_edit/predict_next_edit/
+-- ghost_text) with :AgentPredictEdit/:AgentInlineEdit, the bugbot module
+-- (review/bugbot_tool) with :AgentBugbot, the memory module
+-- (remember/recall/forget/get_memory_prompt) with :AgentMemory, the runner module
+-- (run/llm_curl) with :AgentRun, the hooks module (emit/wrap), get_custom_tools,
+-- and the new write-capable destructive_tools entries. It also asserts the
+-- platform module (is_windows/is_abs/resolve_bin/join/shell_and) and the
+-- get_os_hint export for cross-platform parity, plus the mentions/image/keys
+-- modules (find_mentions/generate_image_tool/backend), rules.parse_frontmatter,
+-- and debug.read_captured_logs_tool.
 
 vim.opt.runtimepath:prepend(vim.fn.getcwd())
