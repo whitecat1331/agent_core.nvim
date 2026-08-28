@@ -160,8 +160,7 @@ function M.read_image(path, question, cb)
     p.model = M.config.vision_model
   end
 
-  local prompt = question and question ~= ""
-      and ("Answer the question about this image:\n" .. question)
+  local prompt = question and question ~= "" and ("Answer the question about this image:\n" .. question)
     or "Describe this image in detail, including any visible text, UI elements, code, or diagrams."
 
   local Runner = require("agent_core.runner")

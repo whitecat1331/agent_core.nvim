@@ -31,7 +31,12 @@ local ask_user = {
   },
   returns = {
     { name = "answer", description = "The user's answer (empty if they dismissed the prompt).", type = "string" },
-    { name = "error", description = "Error message if the prompt could not be shown.", type = "string", optional = true },
+    {
+      name = "error",
+      description = "Error message if the prompt could not be shown.",
+      type = "string",
+      optional = true,
+    },
   },
 }
 

@@ -32,9 +32,11 @@ h.describe("browser", function()
 
   h.it("browser_open rejects non-http URLs", function()
     local err
-    Browser.browser_open_tool().func({ url = "ftp://example.com" }, { on_complete = function(_, e)
-      err = e
-    end })
+    Browser.browser_open_tool().func({ url = "ftp://example.com" }, {
+      on_complete = function(_, e)
+        err = e
+      end,
+    })
     h.equals("only http(s) URLs are supported", err)
   end)
 end)

@@ -46,9 +46,11 @@ h.describe("vision", function()
 
   h.it("read_image tool rejects a missing path", function()
     local err
-    Image.read_image_tool().func({}, { on_complete = function(_, e)
-      err = e
-    end })
+    Image.read_image_tool().func({}, {
+      on_complete = function(_, e)
+        err = e
+      end,
+    })
     h.equals("path is required", err)
   end)
 

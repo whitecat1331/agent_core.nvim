@@ -149,9 +149,13 @@ function M.arm(entry)
   end
   local ms = mins * 60 * 1000
   local timer = uv.new_timer()
-  timer:start(ms, ms, vim.schedule_wrap(function()
-    M.run(entry)
-  end))
+  timer:start(
+    ms,
+    ms,
+    vim.schedule_wrap(function()
+      M.run(entry)
+    end)
+  )
   timers[entry.id] = timer
 end
 

@@ -21,7 +21,8 @@ M.config = {
   context_files = 5, -- max grep-matched files (beyond the current file)
 }
 
-local EDIT_SYSTEM = [[You are a multi-file refactoring engine. Given a symbol and its cross-file usage, return a JSON array of coordinated edits. Each edit is an object with three string fields:
+local EDIT_SYSTEM =
+  [[You are a multi-file refactoring engine. Given a symbol and its cross-file usage, return a JSON array of coordinated edits. Each edit is an object with three string fields:
 - "path": the file path relative to the repository root.
 - "find": the exact existing text to replace (include enough surrounding context to be unique).
 - "replace": the replacement text.

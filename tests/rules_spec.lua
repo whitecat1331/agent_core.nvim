@@ -81,7 +81,8 @@ h.describe("rules", function()
     vim.fn.mkdir(dir .. "/.agent_core/rules", "p")
     vim.fn.writefile({ "---", "description: Sec", "---", "rule body" }, dir .. "/.agent_core/rules/security.mdc")
     local saved_cfg = core.config.rules
-    core.config.rules = { enabled = true, filenames = {}, project_rules_dir = ".agent_core/rules", user_rules_dir = dir .. "/none" }
+    core.config.rules =
+      { enabled = true, filenames = {}, project_rules_dir = ".agent_core/rules", user_rules_dir = dir .. "/none" }
     local saved_root = Indexer.root
     Indexer.root = function()
       return dir

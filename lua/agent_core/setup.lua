@@ -450,24 +450,21 @@ function M.setup_cmd()
 
       collect_keys(model.rows, function()
         local endpoints = model.endpoints
-        vim.ui.input(
-          {
-            prompt = "Extra Ollama endpoints (space-separated, blank to keep): ",
-            default = table.concat(endpoints, " "),
-          },
-          function(input)
-            local ep = {}
-            if input and input ~= "" then
-              for url in input:gmatch("%S+") do
-                ep[#ep + 1] = url
-              end
+        vim.ui.input({
+          prompt = "Extra Ollama endpoints (space-separated, blank to keep): ",
+          default = table.concat(endpoints, " "),
+        }, function(input)
+          local ep = {}
+          if input and input ~= "" then
+            for url in input:gmatch("%S+") do
+              ep[#ep + 1] = url
             end
-            vim.api.nvim_win_close(vim.api.nvim_get_current_win(), true)
-            M.save({ enabled = enabled, keys = keys, endpoints = ep }, function()
-              vim.notify("Agent setup saved", vim.log.levels.INFO)
-            end)
           end
-        )
+          vim.api.nvim_win_close(vim.api.nvim_get_current_win(), true)
+          M.save({ enabled = enabled, keys = keys, endpoints = ep }, function()
+            vim.notify("Agent setup saved", vim.log.levels.INFO)
+          end)
+        end)
       end)
     end,
   })

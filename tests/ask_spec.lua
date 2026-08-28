@@ -12,9 +12,11 @@ h.describe("ask", function()
 
   h.it("rejects an empty question", function()
     local err
-    Ask.ask_user_tool().func({ question = "" }, { on_complete = function(_, e)
-      err = e
-    end })
+    Ask.ask_user_tool().func({ question = "" }, {
+      on_complete = function(_, e)
+        err = e
+      end,
+    })
     h.equals("question is required", err)
   end)
 
@@ -22,18 +24,22 @@ h.describe("ask", function()
     local saved = Ask.config.enabled
     Ask.config.enabled = false
     local err
-    Ask.ask_user_tool().func({ question = "q" }, { on_complete = function(_, e)
-      err = e
-    end })
+    Ask.ask_user_tool().func({ question = "q" }, {
+      on_complete = function(_, e)
+        err = e
+      end,
+    })
     h.equals("ask_user is disabled", err)
     Ask.config.enabled = saved
   end)
 
   h.it("errors in headless and defers otherwise", function()
     local err
-    Ask.ask_user_tool().func({ question = "q" }, { on_complete = function(_, e)
-      err = e
-    end })
+    Ask.ask_user_tool().func({ question = "q" }, {
+      on_complete = function(_, e)
+        err = e
+      end,
+    })
     if #vim.api.nvim_list_uis() == 0 then
       h.equals("no UI available (headless); state your assumption and proceed", err)
     else

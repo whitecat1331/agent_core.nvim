@@ -207,7 +207,12 @@ local browser_screenshot = {
     type = "table",
     fields = {
       { name = "url", description = "The fully-qualified http(s) URL to capture.", type = "string" },
-      { name = "path", description = "Optional output path; defaults to <data>/agent_core/screenshots/<ts>.png.", type = "string", optional = true },
+      {
+        name = "path",
+        description = "Optional output path; defaults to <data>/agent_core/screenshots/<ts>.png.",
+        type = "string",
+        optional = true,
+      },
     },
     required = { "url" },
     usage = {

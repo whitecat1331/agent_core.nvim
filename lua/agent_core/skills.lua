@@ -323,7 +323,12 @@ local run_skill = {
     type = "table",
     fields = {
       { name = "name", description = "Skill name (must be user-invocable).", type = "string" },
-      { name = "argument", description = "Optional argument to substitute into the skill's {{args}} placeholder.", type = "string", optional = true },
+      {
+        name = "argument",
+        description = "Optional argument to substitute into the skill's {{args}} placeholder.",
+        type = "string",
+        optional = true,
+      },
     },
     required = { "name" },
     usage = {
