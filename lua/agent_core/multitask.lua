@@ -7,9 +7,18 @@
 ---
 --- The model emits multiple `run_agent` tool calls in a single message to run
 --- them concurrently; avante already processes those tool calls in parallel.
+--- Parallel fan-out uses the shared tree (worktree = false). Worktree isolation
+--- is sequential-only: avante has no per-agent cwd, and the global chdir would
+--- collide across concurrent worktree runs, so a second worktree run is rejected
+--- while one is active.
 ---@brief ]]
 
 local M = {}
+
+-- Number of worktree-isolated subagent runs currently in flight. Because
+-- `vim.fn.chdir` is global, worktrees must run sequentially; the guard below
+-- rejects concurrent worktree runs and steers the model to worktree = false.
+local active_worktrees = 0
 
 --- Full tool set for a subagent, resolved from avante's live registry so it
 --- tracks custom tools and disabled_tools automatically. When `allowlist` is
@@ -84,7 +93,7 @@ USAGE:
 - Launch multiple subagents concurrently by emitting MULTIPLE `run_agent` tool calls in a SINGLE message.
 - Each subagent is stateless: give it a highly detailed, self-contained prompt and say exactly what to return.
 - The subagent returns its final `attempt_completion` summary to you; that summary is NOT visible to the user, so synthesize and report it yourself.
-- Set `worktree = true` to isolate a subagent in its own git worktree (rarely needed; only for tasks that would otherwise conflict).
+- Set `worktree = true` to isolate a subagent in its own git worktree. Worktrees are sequential-only (only one at a time); use the shared tree (default) for parallel fan-out.
 - Set `tools` to restrict which tools a subagent may use (an allowlist of tool names).]]
 
 M_tool.param = {
@@ -103,7 +112,7 @@ M_tool.param = {
     },
     {
       name = "worktree",
-      description = "Run the subagent in an isolated detached git worktree. Default false (shared tree).",
+      description = "Run the subagent in an isolated detached git worktree. Sequential-only (one at a time); default false (shared tree, safe for parallel fan-out).",
       type = "boolean",
       optional = true,
     },
@@ -151,18 +160,25 @@ function M_tool.func(input, opts)
     return false, "no tools available for subagent"
   end
 
-  -- Optional worktree isolation. Chdir is global, so we restore it in the
-  -- completion callback. Parallel subagents should use the default shared tree.
+  -- Optional worktree isolation. Chdir is global, so worktrees run sequentially
+  -- (a guard rejects a second concurrent worktree run). Parallel fan-out must
+  -- use the default shared tree (worktree = false).
   local root = vim.fn.getcwd()
   local worktree_dir
   local original_cwd
   if input.worktree == true then
+    if active_worktrees > 0 then
+      return false,
+        "another worktree-isolated subagent is already running; worktrees are sequential-only. "
+          .. "Use worktree = false for parallel fan-out."
+    end
     local dir, err = create_worktree(root)
     if not dir then
       return false, err
     end
     worktree_dir = dir
     original_cwd = vim.fn.getcwd()
+    active_worktrees = active_worktrees + 1
     vim.fn.chdir(dir)
   end
 
@@ -224,6 +240,7 @@ make reasonable assumptions and note them. When finished, call the
     on_complete = function(err)
       if worktree_dir and original_cwd then
         vim.fn.chdir(original_cwd)
+        active_worktrees = math.max(0, active_worktrees - 1)
       end
       if err ~= nil then
         if worktree_dir then
