@@ -2,18 +2,18 @@
 ---@brief [[
 --- A mode is orthogonal to a profile: profiles bundle provider/model/API key,
 --- modes bundle behavior (read-only vs full), tool permissions, and a persona.
---- Modes map onto avante's runtime `avante.config.override` (disabled_tools +
---- auto_approve_tool_permissions) plus a persona injected via
---- `vim.g.agent_mode_prompt`, which the avante system_prompt function reads.
+--- The persona is persisted in `vim.g.agent_mode_prompt`; the read_only /
+--- allow_tools / auto_approve policy is applied per submission by the owned
+--- runtime (agent_core.runtime.tools.filter_for_mode + the approve gate).
 ---@brief ]]
 
 local M = {}
 
---- avante tool names that mutate state. Used to build the read-only allowlist
---- for ask/plan modes. Keep this in sync with avante's built-in tools and any
---- custom tools that can change the filesystem.
+--- Tool names that mutate state. Used to build the read-only allowlist for
+--- ask/plan modes. Keep this in sync with the owned built-ins (runtime.tools.builtins)
+--- and any custom tools that can change the filesystem.
 M.WRITE_TOOLS = {
-  -- avante built-ins that mutate the repo or session state
+  -- owned built-ins that mutate the repo or session state
   "bash",
   "create",
   "edit_file",
@@ -250,21 +250,12 @@ function M.get_active()
   return require("agent_core.keys").get_active_mode()
 end
 
---- True once avante.setup() has run (its config module has providers populated).
-local function avante_ready()
-  local ok, Config = pcall(require, "avante.config")
-  if not ok then
-    return false
-  end
-  return Config.providers ~= nil
-end
-
 --- Compute the auto-approve policy for a mode.
 --- - read_only -> false (read tools never prompt; write tools are disabled anyway)
 --- - auto_approve == "all" -> true (full agent parity)
 --- - otherwise -> every tool except the destructive list
 ---@param mode table
----@param tools string[] all tool names currently registered by avante
+---@param tools string[] all tool names currently registered by the runtime
 function M.auto_approve(mode, tools)
   if mode.read_only then
     return false
@@ -289,50 +280,14 @@ function M.auto_approve(mode, tools)
   return allow
 end
 
---- Apply a mode: persona, tool policy, auto-approve, optional provider/model.
---- The persona and persistence always apply; the avante tool policy is applied
---- only once avante is loaded (otherwise it is applied on restore).
+--- Apply a mode: persona, persistence, and tool-permission gating.
+--- Tool gating is applied at submit time (see runtime.tools.filter_for_mode and
+--- the auto_approve policy below), not via a global override, so the owned
+--- runtime honors read_only/allow_tools/auto_approve per submission.
 function M.switch(mode)
   vim.g.agent_mode = mode.name
   vim.g.agent_mode_prompt = mode.system_prompt or ""
   require("agent_core.keys").save_active_mode(mode.name)
-
-  if not avante_ready() then
-    vim.notify(
-      "Agent mode: " .. (mode.label or mode.name) .. " (tool policy applies once avante loads)",
-      vim.log.levels.INFO
-    )
-    return
-  end
-
-  local Config = require("avante.config")
-
-  local tools = {}
-  local ok_tools, Tools = pcall(require, "avante.llm_tools")
-  if ok_tools and Tools.get_tool_names then
-    tools = Tools.get_tool_names()
-  end
-
-  local disabled = {}
-  if mode.read_only then
-    local allow = mode.allow_tools or {}
-    disabled = vim.tbl_filter(function(t)
-      if vim.tbl_contains(allow, t) then
-        return false
-      end
-      return vim.tbl_contains(M.WRITE_TOOLS, t)
-    end, tools)
-  end
-
-  pcall(Config.override, {
-    mode = "agentic",
-    disabled_tools = disabled,
-    behaviour = { auto_approve_tool_permissions = M.auto_approve(mode, tools) },
-  })
-
-  if mode.provider then
-    pcall(require("avante.api").switch_provider, mode.provider)
-  end
 
   vim.notify("Agent mode: " .. (mode.label or mode.name), vim.log.levels.INFO)
 end
@@ -358,23 +313,9 @@ function M.restore()
 end
 
 function M.setup()
-  -- avante lazy-loads on VeryLazy, so restore the mode once its config is ready.
-  local attempts = 0
-  local function try_restore()
-    local ok = pcall(require, "avante.config")
-    if not ok then
-      return -- avante not installed; nothing to restore
-    end
-    attempts = attempts + 1
-    if avante_ready() then
-      M.restore()
-      return
-    end
-    if attempts < 10 then
-      vim.defer_fn(try_restore, 300)
-    end
-  end
-  vim.schedule(try_restore)
+  -- The owned runtime applies the mode persona/tool policy per submission, so
+  -- restoring the last-used mode is a simple immediate call.
+  vim.schedule(M.restore)
 end
 
 return M

@@ -96,4 +96,19 @@ h.describe("modes", function()
     h.equals("only", Modes.all()[1].name)
     core.config.modes = saved
   end)
+
+  h.it("switch ignores a mode-level provider (profiles own provider/model)", function()
+    local saved_rt = package.loaded["agent_core.runtime"]
+    local called = { model = false }
+    package.loaded["agent_core.runtime"] = {
+      model = function()
+        called.model = true
+      end,
+    }
+    Modes.switch({ name = "test", label = "Test", provider = "openai", system_prompt = "" })
+    h.falsy(called.model, "mode.provider must not override the runtime provider")
+    package.loaded["agent_core.runtime"] = saved_rt
+    vim.g.agent_mode = nil
+    vim.g.agent_mode_prompt = nil
+  end)
 end)
