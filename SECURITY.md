@@ -37,8 +37,9 @@ This plugin is a client-side Neovim orchestrator. Key properties:
   is structural only (paths, language counts, key files, build/test commands);
   it never embeds file contents, so it cannot leak secrets into the chat
   context.
-- **No network egress of its own.** `agent_core` does not make HTTP requests.
-  Network access is delegated to `avante.nvim` and `mcphub.nvim` MCP servers.
+- **No network egress outside the owned provider transport.** `agent_core` makes
+  HTTP requests only through its owned streaming transport (`agent_core.runtime.transport`)
+  to the configured LLM providers, and through `mcphub.nvim` MCP servers.
 - **Per-project opt-in.** `semnav` (a local semantic-graph MCP server) is only
   registered for a repo after the user runs `:AgentIndex`; its daemon is stopped
   on `VimLeavePre`.

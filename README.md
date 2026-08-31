@@ -1,12 +1,14 @@
 ﻿# agent_core.nvim
 
-A Neovim plugin built on top of avante.nvim that helps users transition from
+A standalone Neovim agentic-development plugin that helps users transition from
 third-party IDEs such as VSCode and Cursor, and from traditional development to
-agentic development, as seamlessly as possible. It bundles one-key switching
-between provider/model/API-key profiles, behavior **modes** (ask / plan / debug /
-agent / multi-task), an auto-generated project brief that is injected into the
-system prompt, and a two-tier context strategy that pulls deep context on demand
-via MCP tools.
+agentic development, as seamlessly as possible. It ships its own agent runtime
+(provider transport, per-session agent loop, tool registry, history store, and
+a multi-pane Agents Window), so it has no hard dependency on any upstream chat
+plugin. It bundles one-key switching between provider/model/API-key profiles,
+behavior **modes** (ask / plan / debug / agent / multi-task), an auto-generated
+project brief that is injected into the system prompt, and a two-tier context
+strategy that pulls deep context on demand via MCP tools.
 
 <p align="center">
   <a href="https://github.com/whitecat1331/agent_core.nvim/actions/workflows/ci.yml"><img src="https://github.com/whitecat1331/agent_core.nvim/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -91,8 +93,9 @@ via MCP tools.
     fetched catalog can never set keys/endpoints/trust).
 30. **First-run setup wizard** — `:AgentSetup` (`<leader>aS`) detects env keys,
     stored keys, and local + remote Ollama, collects missing keys, persists the
-    enabled-provider set, and optionally bootstraps policy + default profile
-    from one AI call (catalog tags only).
+    enabled-provider set, then walks a default-profile picker, a default-mode
+    picker, and a guided policy selector (quality/speed/cost, trust, caution).
+    An optional AI policy suggestion is opt-in (`setup.bootstrap`).
 31. **Agent skills** — discover `SKILL.md` procedures (project + user) and
     inject a compact metadata index into the system prompt; the model reads a
     skill's full body on demand with the `read_skill` tool.
@@ -114,7 +117,7 @@ via MCP tools.
     and jumps the caret there.
 38. **Richer @-mentions** — `@file <path>`, `@folder <path>`, and
     `@symbol <name>` join `@codebase` / `@git` / `@web` / `@docs`.
-39. **Session history** — `:AgentHistory` lists prior avante sessions for resume.
+39. **Session history** — `:AgentHistory` lists prior agent sessions for resume.
 40. **Custom modes** — user-defined modes via `config.modes.extra` or
     `<data>/agent_core/modes.json`.
 41. **Automations** — scheduled/recurring headless prompts
@@ -127,7 +130,7 @@ via MCP tools.
     (screenshot, diagram, photo, UI mock) or answers a question about it, via a
     vision-capable profile resolved from the registry's `vision` tag. Multimodal
     `llm_curl` support means image + text prompts work through agent_core's own
-    paths, matching avante's `img-clip` + `render-markdown` interactive flow.
+    runtime, matching the `img-clip` + `render-markdown` interactive flow.
 45. **Composer-style diff UX** — every agent edit (predictive edit, inline edit,
     coordinated edit, bugbot autofix) flows through a shared per-hunk
     accept/reject diff presenter with `:AgentDiffApply` / `:AgentDiffAccept` /
@@ -141,7 +144,6 @@ via MCP tools.
 
 - Neovim 0.10+ (tested against 0.12) on Linux, macOS, or Windows (the plugin is
   platform-agnostic and auto-detects the OS, shell, and path style)
-- [avante.nvim](https://github.com/avante-corp/avante.nvim) (for the chat UI)
 - Optional: [mcphub.nvim](https://github.com/ravitemer/mcphub.nvim) + a
   semantic indexer (`ripvec`, `semnav`) for on-demand retrieval
 - Optional: [snacks.nvim](https://github.com/folke/snacks.nvim) for the profile
@@ -190,65 +192,51 @@ Then in your config:
 require("agent_core").setup()
 ```
 
-### Wire into avante
+### Owned runtime (no upstream wiring)
 
-`agent_core` exposes `get_brief_prompt()`, `get_mode_prompt()`,
-`get_context_prompt()`, `get_workspace_prompt()`, `get_rules_prompt()`,
-`get_notepad_prompt()`, `get_skills_prompt()`, and `get_memory_prompt()` for the
-system prompt, plus the active persona via `vim.g.agent_persona`.
-`get_custom_tools()` returns **every** agent_core custom tool (run_agent, web,
-github, plan, debug, checkpoint, bugbot, memory, skills, rules, ask, browser),
-each already wrapped by lifecycle hooks, so wiring is one loop.
-A minimal `avante.nvim` integration:
+`agent_core` now ships its own agent runtime, so there is nothing external to
+wire: `setup()` installs the Agents Window, the provider registry, per-session
+model selection, and the full custom-tool set out of the box. The system-prompt
+assembly (`get_mode_prompt()`, `get_profile_persona()`, `get_brief_prompt()`, `get_context_prompt()`,
+`get_workspace_prompt()`, `get_rules_prompt()`, `get_notepad_prompt()`,
+`get_skills_prompt()`, `get_memory_prompt()`) and the active persona
+(`vim.g.agent_persona`) are consumed directly by the runtime.
+
+For scripting or a custom UI, the public runtime API is:
 
 ```lua
-require("avante").setup({
-  system_prompt = function()
-    local parts = { "You are a senior software engineer." }
-    local persona = vim.g.agent_persona
-    if persona and persona ~= "" then
-      table.insert(parts, persona)
-    end
-    local ok, core = pcall(require, "agent_core")
-    if ok then
-      for _, fn in ipairs({ "get_mode_prompt", "get_brief_prompt", "get_context_prompt",
-                            "get_rules_prompt", "get_workspace_prompt", "get_notepad_prompt",
-                            "get_skills_prompt", "get_memory_prompt" }) do
-        local ok2, text = pcall(core[fn])
-        if ok2 and text and text ~= "" then
-          table.insert(parts, text)
-        end
-      end
-    end
-    return table.concat(parts, "\n\n")
-  end,
-  custom_tools = function()
-    local tools = {}
-    -- ... your other custom tools (e.g. mcphub's mcp_tool) ...
-    local ok, core = pcall(require, "agent_core")
-    if ok and core.get_custom_tools then
-      for _, t in ipairs(core.get_custom_tools()) do
-        table.insert(tools, t)
-      end
-    end
-    return tools
-  end,
-})
+local rt = require("agent_core.runtime")
+rt.open()                                      -- open the Agents Window grid
+rt.submit("implement the login screen")        -- submit a prompt (active session)
+rt.submit("now add tests", { new = true })     -- fork a fresh session
+rt.model("gemini", "gemini-2.0-flash")         -- switch the active session's model
+rt.sessions()                                  -- list live sessions
 ```
 
-> **Note on keymaps:** avante's default `<leader>am` / `<leader>aM` (ACP
-> selectors) collide with `agent_core`'s `<leader>am` (AgentMode). Remap
-> avante's `mappings.select_acp_mode` / `mappings.select_acp_model` to a free
-> key if you don't use ACP.
+`require("agent_core").get_custom_tools()` still returns **every** agent_core
+custom tool (run_agent, web, github, plan, debug, checkpoint, bugbot, memory,
+skills, rules, ask, browser), each wrapped by lifecycle hooks. The runtime feeds
+them into the agent loop automatically; you only call it directly when embedding
+agent_core in a custom UI.
+
+Prompts passed to `submit()` are slash- and mention-aware: `/plan`, `/mode`,
+`/profile`, `/workflow`, and `/agent` dispatch control actions (switch mode or
+profile, run a workflow, or fork a fresh session), while `@file`, `@git`,
+`#buffer`, `@selection`, and `@lsp` tokens expand into context before the
+prompt reaches the agent loop. MCP servers registered in
+`~/.config/mcphub/servers.json` are discovered at submit time and their tools
+(ripvec/semnav search) are merged into the agent's tool set automatically.
 
 ## Commands & keymaps
 
 | Command         | Keymap       | Purpose                                     |
 |-----------------|--------------|---------------------------------------------|
-| `:AgentSwitch`  | `<leader>aP` | Pick an agent/key profile                   |
+| `:AgentSwitch`  | `<leader>aP` | Switch agent/key profile (optionally by name) |
+| `:AgentModel`   | —            | Pick the active model from the pooled registry |
+| `:AgentModelClear` | —         | Reset the active model to the profile default |
 | `:AgentMode`    | `<leader>am` | Pick an agent mode (ask/plan/debug/agent/multi-task) |
 | `:AgentIndex`   | `<leader>aI` | Regenerate `AVANTE.md` for the current repo |
-| `:AgentProfile` | `<leader>ap` | Show the active profile                     |
+| `:AgentProfile` | `<leader>ap` | Show the active profile (read-only)             |
 | `:AgentRecommend` | —          | Recommend a mode for a prompt (args, selection, or input) |
 | `:AgentRecommendToggle` | —   | Enable/disable automatic mode recommendation |
 | `:AgentAutoSwitch` | `<leader>ao` | Recommend an agent profile for a prompt |
@@ -265,8 +253,13 @@ require("avante").setup({
 | `:AgentBestOfN` | `<leader>ab` | Compare a prompt across multiple agent profiles |
 | `:AgentPlanBuild` | `<leader>aB` | Build (implement) the current/latest plan in agent mode |
 | `:AgentPlanBuildNew` | — | Build the current/latest plan in a fresh agent session |
+| `:AgentPlans` | `<leader>aq` | Open the plan + idea manager (statuses + backlog) |
+| `:AgentPlansToggle` | `<leader>aQ` | Toggle the plan + idea manager / reminder badge |
+| `:AgentPlanIdea` | — | Add an idea to the plan backlog (`.agent_core/plan_ideas.json`) |
 | `:AgentCheckpoint` | `<leader>ac` | Snapshot the working tree (git patch checkpoint) |
 | `:AgentRollback` | — | Restore a checkpoint (git apply -R) |
+| `:AgentKeep` | `<leader>aK` | Lock in the current turn's file edits (advance the discard baseline) |
+| `:AgentDiscard` | `<leader>aX` | Revert this chat's un-kept file edits since the last keep |
 | `:AgentDebugCleanup` | `<leader>ad` | Remove all recorded debug instrumentation |
 | `:AgentDebugStart` | `<leader>aD` | Launch a debug session (real debugger via nvim-dap) |
 | `:AgentDebugContinue` | — | Resume the debug session |
@@ -281,10 +274,19 @@ require("avante").setup({
 | `:AgentBugbot` | `<leader>ag` | Local Bugbot: review + optional autofix (`--autofix --base=X`) |
 | `:AgentMemory` | `<leader>aM` | Show persistent agent memory |
 | `:AgentRun` | `<leader>aR` | Run one prompt headlessly and print the answer |
-| `:AgentPolicy` | `<leader>ay` | Show/set the model policy (alias or `knob=value`) |
+| `:AgentPolicy` | `<leader>ay` | Show/set the model policy (alias, guided setup, or `knob=value`) |
 | `:AgentRegistryList` | — | List every model backend in the registry |
 | `:AgentRegistryAdd` | — | Add a remote model backend (`name provider model endpoint [trust]`) |
-| `:AgentSetup` | `<leader>aS` | First-run setup wizard: keys, endpoints, policy |
+| `:AgentSetup` | `<leader>aS` | First-run setup wizard: keys, endpoints, profile, mode, policy |
+| `:AgentSettingsClear` | — | Wipe all agent_core state and API keys (first-install reset) |
+| `:AgentKey` | — | Set (or remove with `!`) a profile's API key |
+| `:AgentProfileEnable` | — | Enable a chat profile (persisted setup override) |
+| `:AgentProfileDisable` | — | Disable a chat profile (persisted setup override) |
+| `:AgentEndpointList` | — | List Ollama endpoints |
+| `:AgentEndpointAdd` | — | Add a remote Ollama endpoint |
+| `:AgentEndpointRemove` | — | Remove a remote Ollama endpoint |
+| `:AgentManager` | — | Manage profiles, modes, policy, and Ollama endpoints in one panel |
+| `:AgentCheatsheet` | `<leader>a?` | Show a grouped cheat sheet of every command + its mapped key |
 | `:AgentCatalogUpdate` | — | Refresh the model catalog from `config.catalog.url` |
 | `:AgentSkills` | — | List discovered agent skills |
 | `:AgentSkill` | `<leader>at` | Run a user-invocable skill |
@@ -292,7 +294,14 @@ require("avante").setup({
 | `:AgentCommand` | `<leader>aC` | Run a command from the palette |
 | `:AgentImport` | — | Import rules/skills from another IDE (Cursor or VSCode) |
 | `:AgentNextLocation` | `<leader>aL` | Jump to the next predicted edit location |
-| `:AgentHistory` | `<leader>aH` | List prior agent sessions |
+| `:AgentChat` | `<leader>a<Space>` | Open the IDE chat layout (messages + composer + Agents sidebar) |
+| `:AgentIdeClose` | `<leader>a;` | Close the IDE chat layout splits |
+| `:AgentNew` | `<leader>aT` | Start a fresh chat session |
+| `:AgentHistory` | `<leader>aH` | List and resume prior agent sessions |
+| `:AgentSessionBind` | `<leader>ah` | Bind the current session to a profile (restored on resume) |
+| `:AgentRename` | `<leader>ar` | Rename the current agent session |
+| `:AgentFork` | `<leader>aF` | Fork the current agent session into a new chat |
+| `:AgentRewind` | `<leader>aU` | Rewind the current session to an earlier message |
 | `:AgentAutomationList` | `<leader>aA` | List scheduled automations |
 | `:AgentAutomationAdd` | — | Add a scheduled automation (prompt) |
 | `:AgentAutomationRemove` | — | Remove a scheduled automation |
@@ -316,7 +325,7 @@ require("agent_core").setup({
   -- Mode-realm recommendation: classify each submitted prompt and suggest a
   -- mode switch when it is out of scope for the active mode.
   recommend = {
-    enabled = true,                  -- listen on AvanteInputSubmitted
+    enabled = true,                  -- listen on AgentInputSubmitted
     confidence_threshold = 0.6,      -- below this, the LLM fallback runs
     use_llm_fallback = true,         -- one-shot LLM classification
     min_prompt_length = 8,           -- ignore shorter prompts
@@ -357,6 +366,19 @@ require("agent_core").setup({
     include_selection = true,
     include_buffer = true,
   },
+  -- Owned-runtime knobs (session loop, Agents Window UI, clipboard, tool
+  -- toggles, conversation compaction, workflows). `runtime.context` is
+  -- conversation *compaction* (thresholds + cheaper summary model) — NOT the
+  -- auto-attach `context` block above. nil = agent_core.runtime.config defaults.
+  runtime = {
+    -- session = { max_iterations = 25, timeout_ms = 120000 },
+    -- ui      = { enabled = true, border = "rounded", max_panes = 9, indicator = true },
+    -- clipboard = { max_image_bytes = 10 * 1024 * 1024, media_type = "image/png" },
+    -- tools   = { run_agent = true, web_search = false },
+    -- context = { soft_threshold = 16000, hard_threshold = 32000, keep_last_turns = 2,
+    --             compaction_provider = nil, compaction_model = nil },
+    -- workflows = { dir = nil, max_steps = 20 },
+  },
   -- Agent skills: reusable SKILL.md procedures (project + user), indexed by
   -- metadata only; the model reads a skill's body on demand with read_skill.
   skills = {
@@ -377,10 +399,10 @@ require("agent_core").setup({
   ask = {
     enabled = true,
   },
-  -- Session history resume (lists/loads prior avante sessions).
+  -- Session history resume (lists/loads prior agent sessions).
   history = {
     enabled = true,
-    dir = nil,            -- nil = avante history dir (probed) or <data>/agent_core/history
+    dir = nil,            -- nil = <data>/agent_core/history
   },
   -- Scheduled/recurring headless agents.
   automation = {
@@ -406,6 +428,12 @@ require("agent_core").setup({
   plan = {
     dir = ".agent_core/plans", -- where create_plan writes Markdown plans
     build_switch_mode = true, -- :AgentPlanBuild switches to agent mode first
+    ideas_file = nil, -- nil = .agent_core/plan_ideas.json (idea backlog)
+    remind = {
+      enabled = true,       -- master switch (startup popup + persistent badge)
+      startup_popup = true, -- vim.notify once per session when items remain
+      indicator = true,     -- persistent, collapsible reminder badge
+    },
   },
   -- Debug mode: runtime evidence channel.
   debug = {
@@ -423,6 +451,11 @@ require("agent_core").setup({
   -- Agent mode: non-intrusive git patch checkpoints.
   checkpoint = {
     dir = nil,               -- nil = <data>/agent_core/checkpoints
+  },
+  -- Per-session edit journal: keep = lock in a turn, discard = revert un-kept turns.
+  session_edits = {
+    enabled = true,
+    dir = nil,               -- nil = <data>/agent_core/session_edits
   },
   -- Tab autocomplete: FIM insert (blink.cmp source) + predictive edits.
   completion = {
@@ -453,7 +486,7 @@ require("agent_core").setup({
   },
   -- Model-selection policy: three orthogonal knobs + aliases.
   policy = {
-    model_policy = "balanced", -- balanced | fast | good | cheap
+    model_policy = "balanced", -- balanced (= all three) | good | fast | cheap | {good,fast} (1-3 axes)
     trust_scope = "any",       -- any | private | local
     caution = "act_first",     -- act_first | ask_first
   },
@@ -467,7 +500,7 @@ require("agent_core").setup({
   -- First-run setup wizard (:AgentSetup).
   setup = {
     auto_prompt = true,     -- offer :AgentSetup on first load when unconfigured
-    bootstrap = true,       -- run the optional AI suggestion after save
+    bootstrap = false,      -- run the optional AI suggestion after save (opt-in)
     bootstrap_profile = nil, -- nil = first keyed cloud profile, else local Ollama
   },
   -- Local Bugbot: review the working tree/branch and optionally autofix.
@@ -493,6 +526,7 @@ require("agent_core").setup({
     vision_profile = nil,      -- vision (image input) profile; nil = auto-detect
     vision_model = nil,        -- override model for vision calls; nil = profile's model
     max_image_bytes = 10 * 1024 * 1024, -- refuse to encode larger images
+    paste_guard = "block",     -- "block" | "warn" | "auto_switch" | false
   },
   -- Shared diff UX (per-hunk accept/reject) for every agent edit.
   diff = {
@@ -549,7 +583,7 @@ behavior. Each mode bundles:
 | `debug`    | no        | all except destructive  | real debugger first (breakpoints/stepping) → instrumentation fallback |
 | `multi-task` | no      | all except destructive  | parallel fan-out orchestration |
 
-Read-only modes keep avante's read/search tools but disable every mutating
+Read-only modes keep the owned read/search tools but disable every mutating
 tool (`bash`, `create`, `edit_file`, `insert`, `replace_in_file`, `str_replace`,
 `undo_edit`, `write_to_file`, `write_todos`, and the `run_agent` / plan / debug /
 checkpoint custom tools), matching ask/plan behavior. A mode can
@@ -559,11 +593,12 @@ without editing code); `M.switch` computes
 `disabled = WRITE_TOOLS - allow_tools`.
 
 The auto-approve list for full modes is computed dynamically as
-`(all tools) - destructive_tools`, so it stays in sync as avante adds tools.
+`(all tools) - destructive_tools`, so it stays in sync as the owned runtime adds
+tools.
 `bash` can still be destructive; move it into `destructive_tools` if you want
 prompts for it. Set `auto_approve = "all"` on a mode to auto-approve everything.
 
-The active mode is persisted and restored on startup (once avante is loaded).
+The active mode is persisted and restored on startup.
 Pass your own `modes` table to `setup()` to override the defaults. You can also
 **add custom modes** without replacing the built-ins: set `modes.extra = { ... }`
 or write `<data>/agent_core/modes.json` (an array, or `{ "modes": [...] }`).
@@ -584,11 +619,35 @@ changes. `agent_core.plan` mirrors this with two custom tools and two commands:
 - `update_plan(content[, path])` — rewrite the current plan in place.
 - `:AgentPlanBuild [path]` (`<leader>aB`) — switch to `agent` mode and submit the
   plan content as the prompt ("Build").
-- `:AgentPlanBuildNew [path]` — the same, but opens a fresh avante session
-  (`new_chat = true`), best-effort "Build in New Agent".
+- `:AgentPlanBuildNew [path]` — the same, but opens a fresh agent session
+  (`new = true`), best-effort "Build in New Agent".
 
 `plan` mode is read-only for repo code, but `allow_tools` whitelists its own
 plan/todo tools so the artifact can be written.
+
+### Plan + idea manager
+
+Every plan carries a `status` in its frontmatter (`draft` → `in_progress` →
+`completed` → `abandoned` → `draft`; a file without frontmatter reads as
+`draft`), and `:AgentPlanBuild` marks the built plan `in_progress`.
+`:AgentPlans` (`<leader>aq`) opens a scratch-buffer manager with three sections
+— Unfinished plans, Completed/abandoned, and Ideas — with `<CR>` open/promote,
+`s` cycle status, `n` new idea, `p` promote idea, `x` delete idea, `q` close.
+`:AgentPlanIdea [title]` adds an idea to the project-scoped backlog
+(`.agent_core/plan_ideas.json`, or `config.plan.ideas_file`); promoting an idea
+writes a real plan via `create_plan` and removes it from the backlog.
+
+### Reminders (popup + persistent badge)
+
+When the current project has unfinished plans or undrafted ideas, agent_core
+surfaces them with a once-per-session `vim.notify` popup plus a persistent,
+collapsible floating badge (`agent_core · N unfinished plan(s) · M idea(s)`),
+both gated by `config.plan.remind`. In the badge, `<CR>`/`e` expand it into
+`:AgentPlans`, and `q`/`<Esc>` dismiss it for the session; `:AgentPlansToggle`
+(`<leader>aQ`) toggles between the two. Both surfaces auto-refresh in real time
+via the `User AgentPlanChanged` autocmd, which fires on every plan/idea
+mutation — so drafting a plan or capturing an idea updates the badge without a
+reload or `:cd`.
 
 ## Debug mode (instrumentation loop + cleanup)
 
@@ -621,7 +680,7 @@ captured logs — same loop, no long-running daemon.
 
 On top of the instrumentation loop above, `agent_core.dap` adds a genuine
 interactive debugger the AI drives end-to-end — the closest thing to an injected
-"paused at `file:line`" event without forking avante. It is a thin,
+"paused at `file:line`" event without any upstream fork. It is a thin,
 adapter-agnostic controller over
 [nvim-dap](https://github.com/mfussenegger/nvim-dap): it only speaks nvim-dap's
 generic API, so **every** DAP adapter is supported with no per-language code in
@@ -647,10 +706,11 @@ The model drives the debugger through these custom tools (all wired via
 The blocking tools (`debug_start`, `debug_continue`, `debug_step_*`,
 `debug_restart`) issue the DAP command and **hold** their `on_complete` until
 the debugger actually stops, then return the full paused state (source line,
-stack frames, scopes, locals, and captured console output). Because avante feeds
-a `tool_result` straight back into the conversation, this is event-identical to
-an injected "paused" message — no avante rewrite required. The tools stay
-out of `destructive_tools`, so the debug loop runs uninterrupted in full modes.
+stack frames, scopes, locals, and captured console output). Because the owned
+runtime feeds a `tool_result` straight back into the conversation, this is
+event-identical to an injected "paused" message — no rewrite required. The tools
+stay out of `destructive_tools`, so the debug loop runs uninterrupted in full
+modes.
 
 The `debug` mode persona now **prefers the real debugger** when an adapter is
 available for the language (discovered via `debug_list_adapters`): set
@@ -737,14 +797,38 @@ Agent mode supports checkpoints so a bad change can be reverted.
 The `agent` persona reminds the model to checkpoint before large or risky
 changes.
 
+### Per-turn keep / discard
+
+Complementing whole-tree checkpoints, `agent_core.session_edits` journals every
+file mutation the active chat makes (`write_to_file` and `str_replace`) so edits
+can be reverted at per-turn granularity, matching Cursor's Keep / Undo All:
+
+- `:AgentKeep` (`<leader>aK`) — lock in the current turn's edits by advancing the
+  discard baseline. Files are already persisted, so this is bookkeeping only.
+- `:AgentDiscard` (`<leader>aX`) — revert every un-kept turn's edits since the
+  last keep, in LIFO order. Files the agent created are deleted; overwritten
+  files are restored to their prior bytes.
+
+Journals live at `<data>/agent_core/session_edits/<session_id>.json`
+(configurable via `config.session_edits.dir`). v1 journals only `write_to_file`
+and `str_replace`; `bash` shell mutations are still covered by the whole-tree
+`:AgentRollback` checkpoint.
+
+### Command + keymap cheat sheet
+
+`:AgentCheatsheet` (`<leader>a?`) opens a floating, grouped reference of every
+`Agent*` command alongside its currently-mapped key. The key column is read from
+live keymap state at render time, so user remaps (`vim.keymap.set`) show up on
+reopen or on `r`; `q`/`<Esc>` closes. Unmapped commands render an em dash (`—`).
+
 ## Multi-task (parallel subagents)
 
 In `multi-task` mode the persona instructs the model to fan out independent
-work using the `run_agent` tool. Unlike avante's built-in read-only
-`dispatch_agent`, `run_agent` subagents get the full write-capable tool set and
-run on avante's agent loop. Emit **multiple `run_agent` tool calls in a single
-message** to run them concurrently; each returns its `attempt_completion`
-summary for the lead to synthesize.
+work using the `run_agent` tool. `run_agent` subagents get the full
+write-capable tool set and run on the owned agent loop (per-session provider/
+model). Emit **multiple `run_agent` tool calls in a single message** to run them
+concurrently; each returns its `attempt_completion` summary for the lead to
+synthesize.
 
 `run_agent` accepts:
 
@@ -755,10 +839,14 @@ summary for the lead to synthesize.
   changes the process cwd, so worktrees are **sequential-only**: a second
   worktree run is rejected while one is active. Use the default shared tree for
   parallel fan-out and `worktree = true` only for a single isolated task.
+- `profile` (optional) — a profile name to run the subagent under.
+- `model` (optional) — a model override for the active profile (or the named
+  `profile`). Because provider/model are **per-session** fields on the owned
+  runtime (not a process-global), overridden subagents fan out in parallel.
 
 ## Mode recommendation
 
-`agent_core` listens for avante's `AvanteInputSubmitted` event and classifies
+`agent_core` listens for the owned `AgentInputSubmitted` event and classifies
 each prompt against the active mode's **realm**. If the prompt is a poor fit —
 e.g. "implement this feature" while in `ask`, or "fix this bug" while in
 `plan` — it suggests switching to the best-fit mode with a reason and an
@@ -770,8 +858,8 @@ Classification is **hybrid**:
    against each mode's `keywords`). High-confidence matches short-circuit with
    no network call.
 2. **LLM fallback** — for low-confidence prompts, a one-shot classification
-   request is sent through avante's own client. On any failure or timeout it
-   degrades gracefully to the heuristic result.
+   request is sent through the owned provider transport. On any failure or
+   timeout it degrades gracefully to the heuristic result.
 
 Modes carry two realm-hint fields (`lua/agent_core/modes.lua`) that drive this:
 
@@ -789,7 +877,7 @@ Config keys live under `require("agent_core").setup({ recommend = { ... } })`.
 
 ## Agent autoswitch (provider/model router)
 
-`agent_core` also listens for `AvanteInputSubmitted` and classifies each prompt
+`agent_core` also listens for `AgentInputSubmitted` and classifies each prompt
 against the profiles' declared **strengths**. If a different profile is a
 better fit — e.g. "summarize this document" while DeepSeek is active, or
 "review the security architecture" while Gemini is active — it offers an
@@ -798,8 +886,9 @@ interactive `Switch / Ignore` prompt.
 Routing is hybrid, mirroring the mode recommender:
 
 1. **Heuristic** — weighted keyword scoring over each profile's `keywords`.
-2. **LLM fallback** — one-shot classification through avante's own client for
-   low-confidence prompts, degrading to the heuristic on failure/timeout.
+2. **LLM fallback** — one-shot classification through the owned provider
+   transport for low-confidence prompts, degrading to the heuristic on
+   failure/timeout.
 
 Profiles carry three routing fields (`lua/agent_core/profiles.lua`):
 
@@ -824,7 +913,7 @@ live under `require("agent_core").setup({ autoswitch = { ... } })`.
 
 ### Merged recommendations
 
-The mode recommender and the agent autoswitch share one `AvanteInputSubmitted`
+The mode recommender and the agent autoswitch share one `AgentInputSubmitted`
 hook. When both fire on the same prompt (e.g. a task that needs both a
 different mode and a different model), `agent_core.coordinator` merges them
 into a **single** prompt with four options: `Switch both`, `Switch mode only`,
@@ -875,8 +964,8 @@ missing. Add `.semnav/` and `.mcphub/` to `.gitignore` in opted-in repos.
 
 ## Web access
 
-`agent_core.web` exposes two read-only avante custom tools (wire them into
-`custom_tools`, see the wiring example above):
+`agent_core.web` exposes two read-only custom tools (wired into the owned
+runtime's tool registry automatically):
 
 - `web_fetch` — retrieve an http(s) URL and return readable plain text
   (HTML tags stripped). Use it to read documentation or web pages.
@@ -1016,8 +1105,8 @@ Run `:AgentImport` and pick the source (Snacks picker when available, otherwise
 `agent_core.bestofn` fans one prompt out to N configured profiles and shows their
 outputs side-by-side in a read-only scratch buffer, mirroring a best-of-n
 comparison. Each profile is queried concurrently with its own provider/model/
-API key through avante's own client (a per-run provider copy avoids mutating the
-shared provider). `:AgentBestOfN [prompt]` (or `<leader>ab`)
+API key through the owned provider transport (a per-run profile copy avoids
+mutating the shared profile). `:AgentBestOfN [prompt]` (or `<leader>ab`)
 runs the comparison; with no argument it uses the visual selection, then an
 input prompt. By default it runs every profile with `autoswitch ~= false`;
 override with `config.bestofn.profiles` (a list of names). Set
@@ -1038,14 +1127,20 @@ orthogonal knobs** (no flat presets):
 
 | Knob | Values | Meaning |
 |------|--------|---------|
-| `model_policy` | `balanced` (default) / `fast` / `good` / `cheap` | the iron triangle: quality vs latency vs cost |
+| `model_policy` | `balanced` (default = all three) / `good` / `fast` / `cheap`, or any 1-3 of them (e.g. `{ "good", "fast" }`) | the iron triangle: quality vs latency vs cost (`good` = quality floor, `fast` = latency ceiling, `cheap` = cost ceiling) |
 | `trust_scope` | `any` (default) / `private` / `local` | data sovereignty: which trust tiers are allowed |
 | `caution` | `act_first` (default) / `ask_first` | mutate directly, or plan/ask + expand destructive tools |
 
 Set them via `config.policy.*`, the `:AgentPolicy` picker, or `:AgentPolicy
-model_policy=cheap`. Named **aliases** compose all three knobs at once
+model_policy=cheap` (or `model_policy={good,fast}`). Selecting 1-3 of
+`good`/`fast`/`cheap` is allowed; all three is equivalent to `balanced`, and an
+empty selection is rejected. Named **aliases** compose all three knobs at once
 (`:AgentPolicy privacy` = `balanced + private + act_first`, `cautious` =
 `cheap + local + ask_first`, etc. — see `M.ALIASES`).
+
+Each axis enforces a hard bound where it applies: `good` requires a quality
+floor (`quality ≥ 0.5`), `fast` rejects high-latency models, and `cheap` rejects
+the `expensive` tier (a cost ceiling). Two-axis combos intersect these bounds.
 
 Everything else is **derived** from the knobs so they can't drift: the classifier
 (`autoswitch`/`recommend` LLM fallback) is disabled when `trust_scope` excludes
@@ -1082,19 +1177,35 @@ collects the missing keys, and records remote Ollama endpoints (default trust
 `private-remote`; `third-party-cloud` still triggers the one-time warning).
 On save it persists the enabled-provider set to
 `<data>/agent_core/setup.json` (which **wins** over live env detection so a key
-removed from the environment later doesn't silently flip a profile), sets the
-default active profile to the first keyed model, and — if `setup.bootstrap` is
-on — makes **one** AI call over catalog tags only to suggest
-`{ model_policy, trust_scope, caution, default_profile }`, presented as
-Apply / Apply with edits / Skip. No AI means a deterministic
-`balanced` / `any` / `act_first` fallback, so plug-and-play holds without any
-network. On a fresh install with no `setup.json` and no active profile,
-`setup.auto_prompt` (headless-safe) offers the wizard on first load.
+removed from the environment later doesn't silently flip a profile), then runs
+a deterministic finish sequence so the install is chat-ready: a default-profile
+picker (falling back to the first keyed model), a default-mode picker, and a
+guided 3-knob policy selector (model policy / trust scope / caution), ending
+with a single summary. The AI suggestion is **opt-in** — set `setup.bootstrap`
+to `true` to have it propose `{ model_policy, trust_scope, caution,
+default_profile }` (Apply / Apply with edits / Skip) before the deterministic
+steps. No AI means a deterministic `balanced` / `any` / `act_first` fallback,
+so plug-and-play holds without any network. On a fresh install with no
+`setup.json` and no active profile, `setup.auto_prompt` (headless-safe) offers
+the wizard on first load.
+
+Every item the wizard configures also has its own standalone command, so nothing
+is locked behind `:AgentSetup`: `:AgentKey` (keys), `:AgentProfileEnable` /
+`:AgentProfileDisable` (enabled set), `:AgentEndpointAdd` / `:AgentEndpointRemove` /
+`:AgentEndpointList` (endpoints), `:AgentSwitch` (profile), `:AgentMode` (mode),
+and `:AgentPolicy` (policy), plus `:AgentModel` (the pooled active-model picker)
+and `:AgentModelClear` (revert to the profile's default model).
+`:AgentManager` is the single interactive panel that
+edits all of these in one place, delegating to the same underlying functions.
+
+Each default profile carries a one-line `system_prompt` persona, injected into
+the system prompt before the mode persona (see `get_profile_persona`). Override
+it by passing your own `profiles` table to `setup()`, or leave it as-is.
 
 To add a remote Ollama box (a GPU host over Tailscale/VPN) so it shows up in
-the wizard and registry, either run `:AgentRegistryAdd` or list it under
-`registry.ollama_endpoints`; discovered models are stamped with their endpoint
-and `private-remote` trust automatically.
+the wizard and registry, either run `:AgentEndpointAdd`, `:AgentRegistryAdd`,
+or list it under `registry.ollama_endpoints`; discovered models are stamped with
+their endpoint and `private-remote` trust automatically.
 
 ## Tab autocomplete (Tab parity)
 
@@ -1126,9 +1237,8 @@ and `private-remote` trust automatically.
   *location* (a line number) and jumps the caret there, the "jump" gesture after
   accepting a predictive edit.
 
-Wire the source in your `blink.cmp` `sources.providers` (see
-`avante_blink.lua` in the example config) and set `config.completion.*` to pick
-the FIM model and endpoint.
+Wire the source in your `blink.cmp` `sources.providers` and set
+`config.completion.*` to pick the FIM model and endpoint.
 
 ### FIM model requirement (important)
 
@@ -1275,7 +1385,7 @@ end)
 
 `agent_core.run(prompt, { profile=, mode=, model=, on_chunk= }, cb)` resolves a
 profile, assembles the same system prompt the interactive agent gets, and streams
-through avante's own client. `:AgentRun [prompt]` (`<leader>aR`) runs it
+through the owned provider transport. `:AgentRun [prompt]` (`<leader>aR`) runs it
 interactively. This is the local analog of a headless SDK runtime and
 Automations (which run on a cloud VM).
 
@@ -1286,21 +1396,21 @@ under `config.hooks` (or listen for the matching `User` autocmd):
 
 | Hook           | Autocmd                 | Fires when                                    |
 |----------------|-------------------------|-----------------------------------------------|
-| `before_prompt`| `AgentHookBeforePrompt` | a prompt is submitted (avante input)          |
+| `before_prompt`| `AgentHookBeforePrompt` | a prompt is submitted (agent input)     |
 | `after_prompt` | `AgentHookAfterPrompt`  | right after submission                        |
 | `before_tool`  | `AgentHookBeforeTool`   | an agent_core custom tool runs                |
 | `after_tool`   | `AgentHookAfterTool`    | an agent_core custom tool completes           |
 | `on_run_end`   | `AgentHookRunEnd`       | a headless run completes                      |
 
 `before/after_tool` wrap agent_core custom tools only (they are wired through
-`get_custom_tools()`); avante built-ins (`bash`, `write_to_file`) are not wrapped
-without an upstream avante fork.
+`get_custom_tools()`); the owned built-ins (`bash`, `write_to_file`) are
+dispatched through the runtime tool registry, not wrapped here.
 
 ## @-mentions (local analog of an attach UI)
 
 You can `@`-attach context (codebase, web, docs, git, file, folder, symbol) to a
-prompt. avante has no attach hook, so `agent_core.mentions` provides the local
-analog: it expands `@codebase <query>` (ripgrep search), `@git <pr|issue> <n>`
+prompt. There is no native attach hook, so `agent_core.mentions` provides the
+local analog: it expands `@codebase <query>` (ripgrep search), `@git <pr|issue> <n>`
 (`gh` CLI), `@web <query>` (web_search), `@docs <path>` / `@file <path>` (local
 file), `@folder <path>` (recursive file listing), and `@symbol <name>` (LSP
 document symbols with a ripgrep fallback) tokens into inline context blocks.
@@ -1327,12 +1437,19 @@ prompt) and opens the result in a scratch buffer for review;
   `read_image` fails with a clear error instead. Images larger than
   `config.image.max_image_bytes` are refused.
 
-For interactive chat, image input is already handled by avante's own attachment
-path: install [img-clip.nvim](https://github.com/HakonHarnes/img-clip.nvim)
-(paste/drag-drop an image) and add the `Avante` filetype to
-[render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim)
-so pasted images render inline. `read_image` is the agent_core bridge for the
+For interactive chat, image input is handled by the owned clipboard bridge:
+install [img-clip.nvim](https://github.com/HakonHarnes/img-clip.nvim)
+(paste/drag-drop an image); the Agents Window panes use the `markdown`
+filetype, so [render-markdown.nvim](https://github.com/MeanderingProgrammer/render-markdown.nvim)
+renders pasted images inline. `read_image` is the agent_core bridge for the
 agent's own tool calls (headless runner, automations, and custom tools).
+
+The owned runtime guards interactive pastes: if the active model cannot see
+images (e.g. DeepSeek), the paste is handled per `config.image.paste_guard` —
+`"block"` (default, refuse the paste with an error), `"warn"` (notify but still
+paste), `"auto_switch"` (switch to the vision profile first), or `false`
+(disable the guard). This closes the gap left by validating image capability
+only at the API layer.
 
 ## Auto context attachment
 
@@ -1340,8 +1457,8 @@ agent's own tool calls (headless runner, automations, and custom tools).
 from the editor's live state — the active buffer window around the caret, the
 current visual selection, and the LSP diagnostics for the buffer — so the agent
 sees your current file, selection, and linter errors without any manual
-`@`-mention. `get_context_prompt()` is the export to wire into avante's
-`system_prompt` (it is already in the wiring example above), and it is bounded
+`@`-mention. `get_context_prompt()` is the export the owned runtime injects into
+its system prompt automatically, and it is bounded
 by `context.max_lines` / `context.max_chars`. Each part can be toggled via
 `context.include_buffer` / `include_selection` / `include_diagnostics`.
 
@@ -1354,13 +1471,61 @@ headless session (no UI) it fails fast with an actionable error so the agent can
 proceed with a documented assumption rather than hanging. Enabled by default
 (`ask.enabled`).
 
+## Chat workspace (Cursor IDE layout)
+
+`agent_core` opens chats in a Cursor-shaped **split-based IDE layout** via
+`:AgentChat` (`<leader>a<Space>` or `<leader>a `): the editor stays on the
+left, **chat messages** sit in a center-right column, the **composer** is a
+split at the bottom of that column, and the **Agents** history sidebar is on the
+far right (open chats + history grouped by Today / Yesterday / Last 7 Days /
+Last 30 Days / Older, with status icons).
+
+- `:AgentChat [prompt]` opens the layout (submits `prompt` when given);
+  `:AgentNew [prompt]` (`<leader>aT`) starts a fresh chat;
+  `:AgentIdeClose` (`<leader>a;`) tears down the chat splits.
+- **Composer:** Enter sends, Shift+Enter (`<C-j>`) inserts a newline. Bottom-left
+  **mode** and **model** pills in the statusline footer open searchable pickers
+  on click (or use `<C-d>` / `<C-m>` in normal mode). `<C-n>` new chat,
+  `<C-s>` stop, `<C-x><C-o>` @-mention / slash menu, `q` close.
+- **Agents sidebar:** `<CR>` focus/resume, `r` rename, `d` delete, `/` filter,
+  `q` close. Message view: `<Tab>` / `<S-Tab>` cycle open chats, `q` close layout.
+- **Persistence:** completed turns are saved to `<data>/agent_core/history`;
+  open chat ids are saved to `<data>/agent_core/open_sessions.json` on exit and
+  restored on the next startup (`runtime.ui.restore_sessions`, default on).
+- Set `runtime = { ui = { auto_open = true } }` to open the chat layout on every
+  startup (even with no prior sessions).
+- Set `runtime = { ui = { ide_layout = false } }` to use the legacy floating
+  workspace instead of splits.
+- Tool results render as collapsible `## Tool · <name>` blocks (marker folding).
+
+The composer sends through the same submit path as a plain prompt, so `/plan`,
+`/mode`, `/profile`, `/workflow`, `/agent`, and `@file` / `@git` / `@codebase`
+mentions all expand unchanged. The plain Agents Window grid (`ui.open()`) remains
+available for side-by-side multi-chat floats.
+
 ## Session history (resume)
 
-`agent_core.history` lists and loads prior avante chat sessions so you can
-resume them. `:AgentHistory` (`<leader>aH`) opens a scratch buffer listing
-session ids; `M.list(dir)` / `M.load(dir, id)` are the programmatic form. The
-store is the avante history directory (probed from `avante.history` when
-available, else `<data>/agent_core/history`), overridable via `history.dir`.
+`agent_core.history` lists, resumes, renames, and forks prior agent chat
+sessions. `:AgentHistory` (`<leader>aH`) opens a picker over prior sessions and
+resumes the selected one straight into the Agents Window. `:AgentRename [name]`
+(`<leader>ar`) renames the current session; `:AgentFork [name]` (`<leader>aF`)
+copies the current session into a new chat and opens it. `:AgentRewind [index]`
+(`<leader>aU`) jumps the current session back to a message index (picker when no
+argument), dropping everything after it and backing up the original to
+`<id>.json.rewind-bak`. `:AgentSessionBind [profile]` (`<leader>ah`) binds the
+current session to the active (or a named) profile, so resuming that chat
+restores its model.
+`M.list(dir)` / `M.load(dir, id)` / `M.load_into_sidebar(id)` /
+`M.rename_session(id, title)` / `M.fork_session(id, title)` /
+`M.rewind_session(id, index)` / `M.bind_profile(id, profile)` are the
+programmatic form. The history store is the owned runtime history directory
+(`<data>/agent_core/history`), overridable via `history.dir`. Each session
+record carries its own `title`, `profile`, `provider`, and `model`, so there are
+no sticky side-stores.
+
+> **Per-session models:** provider/model are per-session fields, so multiple
+> open chats can each run a different model simultaneously. `:AgentSessionBind`
+> additionally pins a profile to a chat so resuming restores that model.
 
 ## Automations (scheduled agents)
 
@@ -1386,6 +1551,34 @@ when available, else Chrome/Edge/Chromium headless; set `browser.bin` to force a
 specific CLI. Tools degrade to an actionable "browser unavailable" message rather
 than erroring, and screenshots are written under
 `<data>/agent_core/screenshots/` by default.
+
+## Multi-chat / multi-agent workflow
+
+The intended day-to-day workflow mirrors Cursor: **one chat per project per
+feature**, with occasional cross-project reads. agent_core supports it as
+follows:
+
+- **Workspace awareness** — register every project once with
+  `:AgentWorkspaceAdd` / `:AgentWorkspaceScan`, then any chat sees the compact
+  multi-root index (`get_workspace_prompt()`) and can search/read other
+  projects on demand via the MCP tools (ripvec `root` param, per-project
+  `semnav-*` servers). The active project's brief (`AVANTE.md`) is always
+  injected; open-buffer/selection/diagnostics are auto-attached via
+  `get_context_prompt()`.
+- **Navigate between chats** — `:AgentHistory` (`<leader>aH`) resumes any prior
+  session into the Agents Window; `:AgentRename` (`<leader>ar`) and `:AgentFork`
+  (`<leader>aF`) keep the list navigable and let you branch a chat;
+  `:AgentRewind` (`<leader>aU`) jumps back to an earlier message;
+  `:AgentSessionBind` (`<leader>ah`) remembers which model a chat used so
+  resuming restores it.
+- **Agents Window grid** — the owned runtime renders every open chat as a live
+  pane (one per session) with streaming output, focus switching, and a per-pane
+  model indicator, so multiple chats on different models stream side by side.
+- **Multiple agents** — fan out independent work with the `run_agent` tool
+  (multiple tool calls in one message run concurrently), each with its own
+  context window. Same-model fan-out is fully parallel; a subagent on a
+  *different* model uses `run_agent` with `profile`/`model`, and because
+  provider/model are per-session, overridden subagents fan out in parallel too.
 
 ## Security
 
@@ -1429,7 +1622,7 @@ The plugin ships a dependency-free unit test harness (`tests/harness.lua`) and a
 spec suite covering the pure logic of every module. Run it headlessly:
 
 ```bash
-nvim --headless -u tests/minimal_init.lua "+lua require('tests.run')"
+nvim --headless -u tests/minimal_init.lua "+lua require('tests.run')" +qa
 ```
 
 On success it prints `AGENT_CORE_TESTS_OK`; on any failure it exits non-zero.

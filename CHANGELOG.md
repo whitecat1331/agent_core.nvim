@@ -10,6 +10,24 @@ and this project adheres to
 
 ### Added
 
+- Cursor-style chat workspace (`:AgentChat`, `<leader>a<Space>`): a persistent
+  three-pane surface — chat list (open + searchable history) on the left, the
+  active chat's message view on the right, and a multi-line composer at the
+  bottom. The composer sends with Enter (Shift+Enter = newline) and exposes
+  `<C-n>` new chat, `<C-m>` model picker, `<C-d>` mode picker, `<C-s>` stop,
+  and `<C-x><C-o>` for the @-mention / slash-command menu. `:AgentNew`
+  (`<leader>aT`) starts a fresh session.
+- In-chat model switching persisted per-session: picking a model in the
+  composer applies it to the current session and writes it onto the session
+  record, so resuming a chat restores its model.
+- Stream cancellation end-to-end: the transport handle is threaded through the
+  providers to `Session:cancel()`, exposed as Stop in the composer/message view.
+  Cancelled turns finish with a `cancelled` status and are never persisted.
+- Collapsible tool-call blocks: tool results render as `## Tool · <name>` marker
+  folds, and pane buffers enable `foldmethod=marker`.
+- `history.delete_session` / `history.persist_model` and the runtime
+  `remove_session` helper backing chat-list rename/delete.
+
 - `agent_core.registry`: unified model registry with trust tiers (`local`,
   `private-remote`, `third-party-cloud`), role tags (`primary` / `completion` /
   `edit` / `classifier`), and value tags (`cost`, `latency`, `fim`,
@@ -77,10 +95,52 @@ and this project adheres to
   providers (file read, recursive listing, LSP document symbols with ripgrep
   fallback) join the existing `@codebase` / `@git` / `@web` / `@docs`.
 - Session history (`agent_core.history`): `M.list()` / `M.load()` and
-  `:AgentHistory` (`<leader>aH`) list and resume prior avante chat sessions.
+  `:AgentHistory` (`<leader>aH`) list and resume prior agent chat sessions.
+  `:AgentRename` (`<leader>ar`), `:AgentFork` (`<leader>aF`),
+  `:AgentRewind` (`<leader>aU`), and `:AgentSessionBind` (`<leader>ah`) add
+  Cursor-style chat navigation: rename, branch, jump-back-to-a-message, and
+  per-session model recall on resume.
 - Custom modes (`agent_core.modes`): user-defined modes via `modes.extra` or
   `<data>/agent_core/modes.json`, merged with the built-ins (a plain array still
   replaces them) and surfaced in `:AgentMode` + mode recommendation.
+- Custom profiles (`agent_core.profiles`): user-defined routable agents via
+  `profiles.extra` or `<data>/agent_core/profiles.json`, merged with the
+  defaults (deduped by name; a plain array still replaces them). A custom
+  profile can carry its own `endpoint` (reaching the registry + completion
+  backends), `trust`, and `keywords`/`when_to_use` for autoswitch routing, with
+  missing capability tags defaulted from the provider. The `GPU Ollama
+  (qwen2.5-coder)` agent is no longer bundled in the catalog — it is seeded as
+  the canonical example in the user's `profiles.json`.
+- Plan + idea manager (`agent_core.plan` + `agent_core.plan_manager`): plans
+  now carry a `status` in their Markdown frontmatter (`draft` → `in_progress` →
+  `completed` → `abandoned` → `draft`; missing frontmatter reads as `draft`),
+  `:AgentPlanBuild` marks a plan `in_progress`, and `:AgentPlans` (`<leader>aq`)
+  opens a scratch-buffer manager listing unfinished plans, completed/abandoned
+  plans, and a project-scoped ideas backlog (`.agent_core/plan_ideas.json`).
+  `:AgentPlanIdea [title]` adds an idea; promoting one writes a real plan and
+  removes it from the backlog. `plan.list()` / `read_status` / `set_status` /
+  `cycle_status` and `add_idea` / `remove_idea` / `promote_idea` back the UI.
+- Plan + idea reminders (`agent_core.plan` + `agent_core.plan_manager`): a
+  once-per-session `vim.notify` startup popup plus a persistent, collapsible
+  floating badge (`agent_core · N unfinished plan(s) · M idea(s)`) that surfaces
+  outstanding plans and undrafted ideas, project-scoped and gated by
+  `config.plan.remind` (`enabled` / `startup_popup` / `indicator`). In the
+  badge `<CR>`/`e` expand to `:AgentPlans` and `q`/`<Esc>` dismiss for the
+  session; `:AgentPlansToggle` (`<leader>aQ`) toggles. Every plan/idea mutation
+  emits a `User AgentPlanChanged` autocmd so both surfaces auto-refresh (and
+  re-surface after a 0 → non-zero transition) with no reload or `:cd` required.
+- Per-turn keep / discard (`agent_core.session_edits`): journals every
+  `write_to_file` / `str_replace` the active chat makes, so `:AgentKeep`
+  (`<leader>aK`) locks in a turn and `:AgentDiscard` (`<leader>aX`) reverts the
+  un-kept turns in LIFO order (deleting created files, restoring overwritten
+  files). Complements whole-tree checkpoints with Cursor-style per-turn Undo
+  All. Configurable via `config.session_edits`; journals live at
+  `<data>/agent_core/session_edits/<session_id>.json`.
+- Command + keymap cheat sheet (`agent_core.cheatsheet`): `:AgentCheatsheet`
+  (`<leader>a?`) opens a floating, grouped reference of every `Agent*` command
+  and its currently-mapped key. The key column is introspected from live
+  keymap state at render time (not a hardcoded table), so user `vim.keymap.set`
+  remaps are reflected on reopen or `r`; `q`/`<Esc>` closes.
 - Automations (`agent_core.automation`): recurring prompts persisted to
   `<data>/agent_core/automations.json` and scheduled via `vim.uv` timers, with
   `:AgentAutomationList/Add/Remove/Run` (`<leader>aA`); each run goes through
@@ -91,12 +151,17 @@ and this project adheres to
   `read_image` vision tool reads/describes an image (or answers a question about
   it) through a vision-capable profile. `runner.llm_curl` now accepts an
   `images` list (base64 + media type) and builds the multimodal array-form
-  content avante expects. Adds the `vision` capability tag to the catalog/
+  content the owned runtime expects. Adds the `vision` capability tag to the catalog/
   registry, `registry.for_capability("vision")` + `registry.is_vision(model)`,
   and `image` config keys (`vision_profile` / `vision_model` /
   `max_image_bytes`). A text-only model is never silently sent an image —
   `read_image` refuses with a clear error when no vision-capable profile
   resolves.
+- Interactive image-paste guard (`agent_core.image`): `install_paste_guard()`
+  guards interactive pastes via the owned clipboard bridge so pasting an image
+  into a chat whose active model cannot see images (e.g. DeepSeek) is handled
+  per `image.paste_guard` (`"block"` / `"warn"` / `"auto_switch"` / `false`),
+  with pure `paste_allowed` / `guard_paste` helpers that are unit-tested.
 - Composer-style diff UX (`agent_core.diff`): a shared per-hunk accept/reject
   presenter for every edit path. `completion.apply_edit` and bugbot autofix
   route through it; adds `:AgentDiffApply` / `:AgentDiffAccept` /
@@ -111,8 +176,57 @@ and this project adheres to
   requests a structured JSON edit set, validates every path inside the repo
   root, checkpoints, applies, and presents a combined diff with accept/cancel
   (rollback via `:AgentRollback`).
+- Owned-runtime config surface (`runtime` block): `agent_core.setup({ runtime =
+  {...} })` now merges `session` / `ui` / `clipboard` / `tools` / `context`
+  (conversation compaction) / `workflows` knobs into
+  `agent_core.runtime.config`, so the Phase 6 features are user-configurable
+  instead of locked to defaults. The top-level `context` block remains auto
+  *attach* context (buffer/selection/diagnostics) — distinct from
+  `runtime.context` compaction.
+- Slash commands + context variables wired into `runtime.submit`: `/plan`,
+  `/mode`, `/profile`, `/workflow`, and `/agent` dispatch at submit time (mode
+  or profile switch, workflow run, or fresh-session submit), and `@file` /
+  `@git` / `#buffer` / `@selection` / `@lsp` tokens expand before the prompt
+  reaches the agent loop.
+- Owned MCP tool bridge wired into `runtime.submit`: `runtime.mcp` now loads
+  `~/.config/mcphub/servers.json` (best-effort), discovers each server's tools
+  via `tools/list`, and merges them into the agent tool set (`discover_all` +
+  `call_tool`), so ripvec/semnav search tools reach the model directly.
+- First-install reset (`:AgentSettingsClear[!]`): wipes all global
+  agent_core state — API keys (OS keychain + `agent_keys.json`), the active
+  profile/mode, and the entire `<data>/agent_core/` tree — returning the plugin
+  to its out-of-the-box state. `!` skips the confirmation prompt. Project-scoped
+  files (`.agent_core/`, `AVANTE.md`, `.semnav/`, `.mcphub/`) are untouched.
 
 ### Changed
+
+- **Single model list.** `lua/agent_core/catalog_snapshot.lua` is now the sole
+  source of truth for every model backend: identity, capability tags (cost,
+  quality_score, fim/insert_template, reasoning, vision, context_window,
+  latency_hint), and — for entries that double as chat agents — the persona +
+  routing fields (description, system_prompt, autoswitch, keywords,
+  when_to_use). `agent_core.profiles` now projects the entries that carry a
+  system_prompt into the profile list (deriving cost/quality_tier/latency from
+  the catalog), so `profiles.lua` and `catalog_snapshot.lua` can no longer
+  drift. Local Ollama agents carry unified `primary`+`completion`+`edit` roles.
+
+- **Owned agent runtime (avante.nvim retired).** `agent_core.nvim` is now fully
+  self-contained: `lua/agent_core/runtime/` provides the provider transport
+  (`transport.lua` + `providers/*` for DeepSeek/OpenAI-compat, Anthropic,
+  Gemini, and Ollama), a per-session agent loop (`session.lua`), a tool registry
+  (`tools/`), owned history persistence (`history/`), the multi-pane Agents
+  Window grid (`ui/`), and clipboard→vision bridging (`clipboard.lua`). Every
+  `require("avante.*")` was swapped to `agent_core.runtime` and `avante.nvim`
+  was dropped from the dependency list. Provider/model are now **per-session**
+  fields (not a process-global), so N sessions can stream on N different models
+  concurrently, and `run_agent` subagents fan out in parallel instead of the
+  old sequential `active_overrides` guard.
+
+- `agent_core.policy` `model_policy` is now an axis selection: `balanced`
+  (default) or any 1-3 of `good` / `fast` / `cheap`. Selecting all three is
+  equivalent to `balanced`; an empty selection is rejected. Two axes intersect
+  their hard filters and sum their scores. `cheap` now enforces a cost ceiling
+  (rejects the `expensive` tier).
 
 - Brand-neutral on-disk layout: rules/plans/skills now live under
   `.agent_core/` and `<data>/agent_core/`; `.cursor/` interop (rules, skills,
@@ -126,11 +240,11 @@ and this project adheres to
   dynamic auto-approve (all tools minus `destructive_tools`), and startup
   restore.
 - `agent_core.multitask` `run_agent` tool: write-capable parallel subagents on
-  avante's agent loop, with an optional `tools` allowlist and detached git
+  the owned agent loop, with an optional `tools` allowlist and detached git
   worktree isolation.
 - `get_mode_prompt()` export and `modes` / `destructive_tools` config keys.
 - Mode-realm recommendation: hybrid classification (offline keyword heuristic
-  + one-shot LLM fallback) hooked into avante's `AvanteInputSubmitted` event,
+  + one-shot LLM fallback) hooked into the owned `AgentInputSubmitted` event,
   with an interactive Switch/Ignore prompt, `:AgentRecommend` and
   `:AgentRecommendToggle` commands, and a `recommend` config block. Modes now
   carry `keywords` and `when_to_use` realm hints.
@@ -155,9 +269,9 @@ and this project adheres to
 - Generalized indexer helpers `root_for(dir)`, `file_list_for(root)`, and
   `summary_for(root)` so any directory can be rooted and summarized.
 - Web access (`agent_core.web`): read-only `web_fetch` (URL -> readable text)
-  and `web_search` (DuckDuckGo) avante custom tools, both running through `curl`
+  and `web_search` (DuckDuckGo) custom tools, both running through `curl`
   with a user agent and hard timeout.
-- GitHub context (`agent_core.github`): a read-only `github` avante custom tool
+- GitHub context (`agent_core.github`): a read-only `github` custom tool
   wrapping the `gh` CLI to pull PRs, issues, and search results into context via
   an allowlisted subcommand (no arbitrary shell execution).
 - Notepads (`agent_core.notepad`): persistent user-authored markdown notes under
@@ -187,7 +301,7 @@ and this project adheres to
   snapshots (no commits/stash) via the `checkpoint` / `rollback` custom tools
   and `:AgentCheckpoint` / `:AgentRollback` commands plus `<leader>ac`, with a
   registry picker for choosing which snapshot to restore with `git apply -R`.
-- Mode engine reconciliation: `WRITE_TOOLS` now matches avante's actual tool
+- Mode engine reconciliation: `WRITE_TOOLS` now matches the owned built-in tool
   names (`bash`, `create`, `edit_file`, `insert`, `replace_in_file`, `str_replace`,
   `undo_edit`, `write_to_file`, `write_todos`) plus the new custom tools, and
   `destructive_tools` defaults to `{ "bash", "rollback" }`. Read-only modes gain
@@ -215,7 +329,8 @@ and this project adheres to
   with `create_pr` / `commit` / `push` added to `destructive_tools`.
 - `get_custom_tools()` export: returns every agent_core custom tool (run_agent,
   web, github, plan, debug, checkpoint, bugbot, memory, skills, rules, ask,
-  browser) already wrapped by hooks, so avante wiring is a single loop.
+  browser) already wrapped by hooks, so the owned runtime's tool registry
+  consumes them in one loop.
 - Cross-platform layer (`agent_core.platform`): OS detection, absolute-path
   detection (POSIX/drive/UNC), binary resolution, path joining, and a
   shell-aware command joiner. `curl`/`semnav`/`ripvec-mcp` binary resolution and
@@ -267,7 +382,7 @@ and this project adheres to
   frames, scopes, and variables, and evaluate expressions. The blocking tools
   (`debug_start` / `debug_continue` / `debug_step_*`) hold their `on_complete`
   until the debugger actually stops and then return the full paused state, so the
-  `tool_result` is the injection channel (no avante fork). `nvim-dap` is
+  `tool_result` is the injection channel (no upstream fork). `nvim-dap` is
   soft-required: without it (or an adapter) the tools error cleanly and the
   existing instrumentation loop remains the fallback. Ships `:AgentDebugStart` /
   `:AgentDebugContinue` / `:AgentDebugStepOver` / `:AgentDebugStepInto` /
