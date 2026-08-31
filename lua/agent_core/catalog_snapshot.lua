@@ -1,25 +1,34 @@
 ---@mod agent_core.catalog_snapshot Bundled model catalog snapshot (curated data).
 ---@brief [[
---- The shipped, trusted snapshot of non-derivable model metadata: per-token
---- cost, benchmark-derived quality_score, authoritative fim/insert_template and
---- reasoning flags, context window, and a latency hint. This is the fallback
---- that makes first-run setup work with zero network; `agent_core.catalog`
---- overlays a fetched (user-refreshed) catalog on top for freshness.
+--- The single shipped, trusted source of truth for every model backend nvim can
+--- reach. Each entry carries identity (provider/model/name/roles/trust), the
+--- non-derivable capability tags (cost, quality_score, fim/insert_template,
+--- reasoning, vision, context window, latency_hint), and — for entries that
+--- double as routable chat agents — the persona + routing fields (description,
+--- system_prompt, autoswitch, keywords, when_to_use).
+---
+--- agent_core.profiles projects the entries that carry a system_prompt into the
+--- profile list used by autoswitch/runner/registry; entries without one stay
+--- catalog-only (surfaced in the dropdown, not routed). agent_core.catalog
+--- overlays a fetched (user-refreshed) catalog on top for numeric freshness.
 ---
 --- Numeric values are curated priors, not exact or authoritative — the policy
 --- layer treats them as starting weights and the health router measures real
 --- latency at runtime. See agent_core.catalog for the field allowlist that
---- prevents a fetched catalog from overriding security-relevant fields
---- (api_key_name / endpoint / trust / name / roles).
+--- prevents a fetched catalog from overriding security- or routing-relevant
+--- fields (api_key_name / endpoint / trust / name / roles / system_prompt /
+--- keywords / when_to_use).
 ---@brief ]]
 
 return {
-  version = 1,
+  version = 3,
   ---@type {provider:string, model:string, name:string|nil, api_key_name:string|nil,
   ---       roles:string[]|nil, trust:string|nil, cost_in_per_1m:number|nil,
   ---       cost_out_per_1m:number|nil, context_window:number|nil, fim:boolean|nil,
-  ---       insert_template:boolean|nil, reasoning:boolean|nil,
-  ---       quality_score:number|nil, latency_hint:string|nil}[]
+  ---       insert_template:boolean|nil, reasoning:boolean|nil, vision:boolean|nil,
+  ---       quality_score:number|nil, latency_hint:string|nil,
+  ---       description:string|nil, system_prompt:string|nil, autoswitch:boolean|nil,
+  ---       keywords:table|nil, when_to_use:string|nil}[]
   models = {
     -- Anthropic
     {
@@ -38,6 +47,22 @@ return {
       vision = true,
       quality_score = 0.86,
       latency_hint = "low",
+      description = "Anthropic Claude Sonnet",
+      system_prompt = "You are a careful, reasoning-first engineer. Favor rigor, trade-off analysis, and security-minded review.",
+      autoswitch = true,
+      keywords = {
+        { "architecture", 2 },
+        { "design", 2 },
+        { "security", 2 },
+        { "audit", 2 },
+        { "review", 2 },
+        "reason",
+        "complex",
+        "plan",
+        "analyze",
+        "trade-off",
+      },
+      when_to_use = "deep reasoning, architecture, security review, and complex analysis",
     },
     {
       provider = "claude",
@@ -60,7 +85,7 @@ return {
     {
       provider = "openai",
       model = "gpt-4o",
-      name = "GPT-4o",
+      name = "OpenAI",
       api_key_name = "OPENAI_API_KEY",
       roles = { "primary", "classifier" },
       trust = "third-party-cloud",
@@ -73,6 +98,15 @@ return {
       vision = true,
       quality_score = 0.80,
       latency_hint = "low",
+      description = "OpenAI GPT-4o",
+      system_prompt = "You are a general-purpose assistant. Favor clear, well-structured responses for coding and writing.",
+      autoswitch = true,
+      keywords = {
+        { "general", 2 },
+        "reason",
+        "write",
+      },
+      when_to_use = "general coding and reasoning via OpenAI",
     },
     {
       provider = "openai",
@@ -109,6 +143,23 @@ return {
       vision = true,
       quality_score = 0.65,
       latency_hint = "low",
+      description = "Google Gemini Flash",
+      system_prompt = "You are a versatile assistant. Favor clear explanations, summaries, and multimodal awareness.",
+      autoswitch = true,
+      keywords = {
+        { "summarize", 2 },
+        "summarise",
+        "document",
+        "explain",
+        "image",
+        "screenshot",
+        "visual",
+        "diagram",
+        "translate",
+        "long context",
+        "research",
+      },
+      when_to_use = "fast, long-context, or multimodal work: summaries, explanations, images, and research",
     },
     {
       provider = "gemini",
@@ -144,6 +195,28 @@ return {
       reasoning = false,
       quality_score = 0.72,
       latency_hint = "medium",
+      description = "Main coding model via DeepSeek cloud",
+      system_prompt = "You are an efficient, hands-on coding assistant. Prefer concrete implementations over exposition.",
+      autoswitch = true,
+      keywords = {
+        { "implement", 2 },
+        { "build", 2 },
+        "add",
+        "create",
+        "write",
+        "refactor",
+        "fix",
+        "bug",
+        "test",
+        "code",
+        "edit",
+        "update",
+        "change",
+        "rename",
+        "delete",
+        "migrate",
+      },
+      when_to_use = "general coding: implementing, building, and editing code end-to-end",
     },
     {
       provider = "deepseek",
@@ -168,7 +241,7 @@ return {
       provider = "ollama",
       model = "deepseek-coder:1.3b",
       name = "DeepSeek (local)",
-      roles = { "completion", "edit" },
+      roles = { "primary", "completion", "edit" },
       trust = "local",
       cost_in_per_1m = 0,
       cost_out_per_1m = 0,
@@ -178,6 +251,11 @@ return {
       reasoning = false,
       quality_score = 0.35,
       latency_hint = "low",
+      description = "Local Ollama deepseek-coder (offline)",
+      system_prompt = "You are a lightweight local assistant. Favor short, precise answers over long reasoning.",
+      -- Excluded from automatic routing: never silently send real work to the
+      -- 1.3b local model. Select it manually via :AgentSwitch when offline.
+      autoswitch = false,
     },
     {
       provider = "ollama",

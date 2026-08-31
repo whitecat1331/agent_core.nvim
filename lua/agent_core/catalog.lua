@@ -8,9 +8,12 @@
 ---
 --- SECURITY: a fetched catalog is untrusted remote input. Only a small
 --- field allowlist is accepted from it (numeric/capability fields); it can
---- never set api_key_name / endpoint / trust / name / roles, so a malicious or
---- compromised catalog cannot make the wizard read an unexpected env var or
---- point at a hostile endpoint.
+--- never set api_key_name / endpoint / trust / name / roles / description /
+--- system_prompt / autoswitch / keywords / when_to_use, so a malicious or
+--- compromised catalog cannot make the wizard read an unexpected env var,
+--- point at a hostile endpoint, or inject routing/persona metadata. Routing
+--- and persona fields ship only in the bundled snapshot
+--- (agent_core.catalog_snapshot).
 ---@brief ]]
 
 local M = {}
