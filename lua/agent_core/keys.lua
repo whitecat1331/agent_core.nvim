@@ -52,6 +52,13 @@ function M.backend()
   return backend or "json"
 end
 
+--- Override the active backend for tests (keychain/libsecret/credential-manager,
+--- or nil to force the JSON fallback). Callers must save/restore the prior value.
+---@param b string|nil
+function M.set_backend_for_test(b)
+  backend = b
+end
+
 --- Run a command synchronously; return (stdout, ok).
 ---@param cmd string[]|string
 ---@param input string|nil
@@ -66,17 +73,50 @@ local function run(cmd, input)
   return out, (vim.v.shell_error == 0)
 end
 
+--- Build the argv for a keychain secret lookup (pure; testable).
+---@param name string
+---@return string[]
+function M.keychain_get_command(name)
+  if backend == "keychain" then
+    return { "security", "find-generic-password", "-a", name, "-s", SERVICE, "-w" }
+  elseif backend == "libsecret" then
+    return { "secret-tool", "lookup", "service", SERVICE, "account", name }
+  end
+  return {}
+end
+
+--- Build the argv for a keychain secret store (pure; testable). For libsecret
+--- the secret value is supplied on stdin, not argv.
+---@param name string
+---@param key string
+---@return string[]
+function M.keychain_set_command(name, key)
+  if backend == "keychain" then
+    return { "security", "add-generic-password", "-a", name, "-s", SERVICE, "-w", key, "-U" }
+  elseif backend == "libsecret" then
+    return { "secret-tool", "store", "--label=" .. SERVICE .. "/" .. name, "service", SERVICE, "account", name }
+  end
+  return {}
+end
+
+--- Build the argv for a keychain secret deletion (pure; testable).
+---@param name string
+---@return string[]
+function M.keychain_delete_command(name)
+  if backend == "keychain" then
+    return { "security", "delete-generic-password", "-a", name, "-s", SERVICE }
+  elseif backend == "libsecret" then
+    return { "secret-tool", "clear", "service", SERVICE, "account", name }
+  end
+  return {}
+end
+
 --- Fetch a secret from the OS keychain, or nil when unavailable/missing.
 ---@param name string
 ---@return string|nil
 local function keychain_get(name)
-  if backend == "keychain" then
-    local out, ok = run({ "security", "find-generic-password", "-a", name, "-s", SERVICE, "-w" })
-    if ok and out ~= "" then
-      return out:gsub("[\r\n]+$", "")
-    end
-  elseif backend == "libsecret" then
-    local out, ok = run({ "secret-tool", "lookup", "service", SERVICE, "account", name })
+  if backend == "keychain" or backend == "libsecret" then
+    local out, ok = run(M.keychain_get_command(name))
     if ok and out ~= "" then
       return out:gsub("[\r\n]+$", "")
     end
@@ -90,19 +130,11 @@ end
 ---@return boolean
 local function keychain_set(name, key)
   if backend == "keychain" then
-    run({ "security", "delete-generic-password", "-a", name, "-s", SERVICE })
-    local _, ok = run({ "security", "add-generic-password", "-a", name, "-s", SERVICE, "-w", key, "-U" })
+    run(M.keychain_delete_command(name))
+    local _, ok = run(M.keychain_set_command(name, key))
     return ok
   elseif backend == "libsecret" then
-    local _, ok = run({
-      "secret-tool",
-      "store",
-      "--label=" .. SERVICE .. "/" .. name,
-      "service",
-      SERVICE,
-      "account",
-      name,
-    }, key)
+    local _, ok = run(M.keychain_set_command(name, key), key)
     return ok
   end
   return false
@@ -112,11 +144,8 @@ end
 ---@param name string
 ---@return boolean
 local function keychain_delete(name)
-  if backend == "keychain" then
-    local _, ok = run({ "security", "delete-generic-password", "-a", name, "-s", SERVICE })
-    return ok
-  elseif backend == "libsecret" then
-    local _, ok = run({ "secret-tool", "clear", "service", SERVICE, "account", name })
+  if backend == "keychain" or backend == "libsecret" then
+    local _, ok = run(M.keychain_delete_command(name))
     return ok
   end
   return false
@@ -221,6 +250,106 @@ function M.prompt(profile)
       require("agent_core.profiles").switch(profile)
     end
   end)
+end
+
+--- Set (or, with bang, remove) a profile's stored API key without switching the
+--- active profile. Backing for :AgentKey[!]. `on_done` fires after the key is
+--- actually stored/removed (the set path is async via vim.ui.input).
+---@param profile table
+---@param bang boolean
+---@param on_done fun()|nil
+local function apply_key(profile, bang, on_done)
+  on_done = on_done or function() end
+  if not profile.api_key_name or profile.api_key_name == "" then
+    vim.notify("AgentKey: " .. profile.name .. " needs no API key", vim.log.levels.INFO)
+    on_done()
+    return
+  end
+  if bang then
+    M.delete(profile.name)
+    vim.notify("Removed API key for " .. profile.name, vim.log.levels.INFO)
+    on_done()
+    return
+  end
+  local current = M.get(profile.name) or ""
+  vim.ui.input({
+    prompt = profile.api_key_name .. " for " .. profile.name .. ": ",
+    default = current,
+  }, function(input)
+    if input and input ~= "" then
+      M.set(profile.name, input)
+      vim.notify("Stored API key for " .. profile.name, vim.log.levels.INFO)
+    end
+    on_done()
+  end)
+end
+
+--- Standalone :AgentKey[!] [profile] command: set a profile's API key, or with
+--- a bang, remove it. Resolves the profile from `arg` or a picker.
+---@param bang boolean
+---@param arg string|nil
+---@param on_done fun()|nil
+function M.cmd(bang, arg, on_done)
+  local Profiles = require("agent_core.profiles")
+  if arg and arg ~= "" then
+    local p = Profiles.find(arg)
+    if not p then
+      vim.notify("AgentKey: profile not found: " .. arg, vim.log.levels.WARN)
+      if on_done then on_done() end
+      return
+    end
+    apply_key(p, bang, on_done)
+    return
+  end
+  require("agent_core.pickers").pick_profile(function(p)
+    if p then
+      apply_key(p, bang, on_done)
+    elseif on_done then
+      on_done()
+    end
+  end)
+end
+
+--- Wipe all stored secrets (OS keychain + JSON file) and reset the active
+--- profile/mode. Used by :AgentSettingsClear (full first-install reset).
+--- The JSON keys drive which keychain entries to clear, so this must run before
+--- the JSON file is deleted.
+---@return boolean ok
+function M.reset()
+  for _, name in ipairs(M.reset_names()) do
+    keychain_delete(name)
+  end
+  pcall(vim.fn.delete, path)
+  return true
+end
+
+--- Compute the secret names to purge: every non-"_" key in the JSON store plus
+--- every default profile name (covers a missing/corrupt JSON file). Pure and
+--- deterministic so the reset iteration is headless-testable.
+---@return string[]
+function M.reset_names()
+  local names = {}
+  local seen = {}
+  local function add(n)
+    if n and n ~= "" and not seen[n] then
+      seen[n] = true
+      names[#names + 1] = n
+    end
+  end
+  for name in pairs(read()) do
+    if name:sub(1, 1) ~= "_" then
+      add(name)
+    end
+  end
+  local ok, Profiles = pcall(require, "agent_core.profiles")
+  if ok then
+    for _, p in ipairs(Profiles.defaults or {}) do
+      if p.name then
+        add(p.name)
+      end
+    end
+  end
+  return names
 end
 
 return M
