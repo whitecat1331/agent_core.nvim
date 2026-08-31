@@ -46,6 +46,7 @@ check_detect_secrets            || FAILED=$((FAILED + 1))
 check_gitleaks                  || FAILED=$((FAILED + 1))
 
 # Format / lint / smoke
+check_no_avante_require          || FAILED=$((FAILED + 1))
 check_stylua_all                || FAILED=$((FAILED + 1))
 check_selene                    || FAILED=$((FAILED + 1))
 check_smoke_nvim                || FAILED=$((FAILED + 1))
