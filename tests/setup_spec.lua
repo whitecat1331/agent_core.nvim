@@ -76,13 +76,39 @@ h.describe("setup", function()
     h.equals("ask_first", s.caution)
   end)
 
+  h.it("parse_suggestion accepts a two-axis list", function()
+    local s = Setup.parse_suggestion(
+      '{"model_policy":["good","fast"],"trust_scope":"any","caution":"act_first","default_profile":"Claude"}'
+    )
+    h.same({ "fast", "good" }, s.model_policy)
+    h.equals("any", s.trust_scope)
+    h.equals("act_first", s.caution)
+  end)
+
+  h.it("parse_suggestion collapses all three axes to balanced", function()
+    local s =
+      Setup.parse_suggestion('{"model_policy":["good","fast","cheap"],"trust_scope":"any","caution":"act_first"}')
+    h.equals("balanced", s.model_policy)
+  end)
+
+  h.it("parse_suggestion clamps an empty list to balanced", function()
+    local s = Setup.parse_suggestion('{"model_policy":[],"trust_scope":"any","caution":"act_first"}')
+    h.equals("balanced", s.model_policy)
+  end)
+
   h.it("parse_suggestion returns nil + err for garbage", function()
     local s, err = Setup.parse_suggestion("no json here")
     h.equals(nil, s)
     h.truthy(err ~= nil, "error present")
   end)
 
-  h.it("bootstrap_suggest degrades to deterministic defaults without avante", function()
+  h.it("bootstrap_suggest degrades to deterministic defaults without a resolvable key", function()
+    local Runner = require("agent_core.runner")
+    local saved_resolve_key = Runner.resolve_key
+    Runner.resolve_key = function()
+      return nil
+    end
+
     local done = false
     Setup.bootstrap_suggest({
       {
@@ -103,6 +129,8 @@ h.describe("setup", function()
       h.equals("act_first", s.caution)
     end)
     h.truthy(done, "callback invoked synchronously")
+
+    Runner.resolve_key = saved_resolve_key
   end)
 
   h.it("save persists enabled set, keys, and endpoints", function()
@@ -111,16 +139,32 @@ h.describe("setup", function()
 
     local Keys = require("agent_core.keys")
     local Profiles = require("agent_core.profiles")
+    local Pickers = require("agent_core.pickers")
+    local Policy = require("agent_core.policy")
     local stored = {}
     local saved_set = Keys.set
     local saved_switch = Profiles.switch
     local saved_active = Profiles.get_active
+    local saved_pick_mode = Pickers.pick_mode
+    local saved_guided = Policy.guided
+    local saved_bootstrap = Setup.bootstrap_suggest
+    local bootstrap_called = false
     Keys.set = function(name, key)
       stored[name] = key
     end
     Profiles.switch = function() end
     Profiles.get_active = function()
       return "Claude"
+    end
+    Pickers.pick_mode = function(cb2)
+      cb2(nil)
+    end
+    Policy.guided = function(cb2)
+      cb2()
+    end
+    Setup.bootstrap_suggest = function(entries, cb2)
+      bootstrap_called = true
+      cb2(nil, nil)
     end
 
     Setup.save({
@@ -135,10 +179,68 @@ h.describe("setup", function()
     h.equals(false, state.enabled["Gemini"])
     h.equals("sk-test", stored["Claude"])
     h.same({ "http://gpu:11434" }, state.ollama_endpoints)
+    h.falsy(bootstrap_called, "bootstrap_suggest must not run when disabled")
 
     Keys.set = saved_set
     Profiles.switch = saved_switch
     Profiles.get_active = saved_active
+    Pickers.pick_mode = saved_pick_mode
+    Policy.guided = saved_guided
+    Setup.bootstrap_suggest = saved_bootstrap
+    core.config.registry = saved_reg
+  end)
+
+  h.it("finish_setup walks profile -> mode -> policy", function()
+    local saved_reg = vim.deepcopy(core.config.registry)
+    core.config.registry = vim.tbl_deep_extend("force", {}, saved_reg or {}, { setup_path = vim.fn.tempname() })
+
+    local Profiles = require("agent_core.profiles")
+    local Modes = require("agent_core.modes")
+    local Pickers = require("agent_core.pickers")
+    local Policy = require("agent_core.policy")
+
+    local saved_get_active = Profiles.get_active
+    local saved_switch = Profiles.switch
+    local saved_pick_profile = Pickers.pick_profile
+    local saved_pick_mode = Pickers.pick_mode
+    local saved_guided = Policy.guided
+    local saved_switch_mode = Modes.switch
+
+    local switched_mode
+    local guided_called = false
+    local done = false
+    Profiles.get_active = function()
+      return nil
+    end
+    Profiles.switch = function() end
+    Modes.switch = function(m)
+      switched_mode = m
+    end
+    Pickers.pick_profile = function(cb2)
+      cb2(nil) -- cancel -> deterministic fallback
+    end
+    Pickers.pick_mode = function(cb2)
+      cb2(Modes.find("agent"))
+    end
+    Policy.guided = function(cb2)
+      guided_called = true
+      cb2()
+    end
+
+    Setup.finish_setup({}, { bootstrap = false }, function()
+      done = true
+    end)
+
+    h.truthy(done, "finish_setup completes")
+    h.truthy(guided_called, "guided policy invoked")
+    h.equals("agent", switched_mode and switched_mode.name, "mode switched")
+
+    Profiles.get_active = saved_get_active
+    Profiles.switch = saved_switch
+    Pickers.pick_profile = saved_pick_profile
+    Pickers.pick_mode = saved_pick_mode
+    Policy.guided = saved_guided
+    Modes.switch = saved_switch_mode
     core.config.registry = saved_reg
   end)
 end)

@@ -16,7 +16,7 @@ local M = {}
 ---@field bootstrap_profile string|nil nil = first keyed cloud profile, else local Ollama
 M.config = {
   auto_prompt = true,
-  bootstrap = true,
+  bootstrap = false,
   bootstrap_profile = nil,
 }
 
@@ -40,10 +40,12 @@ end
 --- profile has been chosen yet.
 ---@return boolean
 function M.needs_setup()
-  if vim.fn.filereadable(M.setup_path()) == 1 then
+  local readable = vim.fn.filereadable(M.setup_path()) == 1
+  local active = require("agent_core.profiles").get_active()
+  if readable then
     return false
   end
-  return require("agent_core.profiles").get_active() == nil
+  return active == nil
 end
 
 --- Detected environment state: which cloud providers have an env key or a stored
@@ -185,8 +187,7 @@ function M.parse_suggestion(text)
   end
   local Policy = require("agent_core.policy")
   local s = {}
-  s.model_policy = vim.tbl_contains(Policy.KNOBS.model_policy, decoded.model_policy) and decoded.model_policy
-    or "balanced"
+  s.model_policy = Policy.normalize_model_policy(decoded.model_policy) or "balanced"
   s.trust_scope = vim.tbl_contains(Policy.KNOBS.trust_scope, decoded.trust_scope) and decoded.trust_scope or "any"
   s.caution = vim.tbl_contains(Policy.KNOBS.caution, decoded.caution) and decoded.caution or "act_first"
   s.default_profile = decoded.default_profile
@@ -202,6 +203,13 @@ function M.bootstrap_suggest(entries, cb)
   local Runner = require("agent_core.runner")
   local profile = Runner.resolve_profile(M.config.bootstrap_profile)
   if not profile then
+    cb(M.default_suggestion(entries), nil)
+    return
+  end
+
+  -- No AI to ask: a keyed provider with no resolvable key degrades synchronously
+  -- to the deterministic defaults (the same fallback the old "no LLM" path used).
+  if (profile.api_key_name and profile.api_key_name ~= "") and not Runner.resolve_key(profile) then
     cb(M.default_suggestion(entries), nil)
     return
   end
@@ -222,7 +230,7 @@ function M.bootstrap_suggest(entries, cb)
   end
   lines[#lines + 1] = ""
   lines[#lines + 1] = [[Choose a default policy for this user. Reply with ONLY a JSON object:
-{"model_policy":"balanced|fast|good|cheap","trust_scope":"any|private|local","caution":"act_first|ask_first","default_profile":"<one of the names above>"}]]
+{"model_policy":"balanced|<axis>|[\"good\",\"fast\"] (1-3 of good/fast/cheap; all three = balanced)","trust_scope":"any|private|local","caution":"act_first|ask_first","default_profile":"<one of the names above>"}]]
 
   Runner.llm_curl(profile, {
     system_prompt = "You are a configuration assistant. Output only valid JSON, no commentary.",
@@ -264,9 +272,10 @@ end
 ---@param cb fun(choice:string|nil)
 function M.present(suggestion, cb)
   cb = cb or function() end
+  local Policy = require("agent_core.policy")
   local label = string.format(
     "%s / %s / %s -> %s",
-    suggestion.model_policy,
+    Policy.format_model_policy(suggestion.model_policy),
     suggestion.trust_scope,
     suggestion.caution,
     suggestion.default_profile or "none"
@@ -282,8 +291,120 @@ function M.present(suggestion, cb)
   end)
 end
 
+--- Derive a fallback default profile: the first enabled cloud entry with a
+--- stored key, else the first local profile.
+---@param state table setup state
+---@return table|nil
+local function derive_default_profile(state)
+  local Profiles = require("agent_core.profiles")
+  local Keys = require("agent_core.keys")
+  local target
+  for _, p in ipairs(Profiles.all()) do
+    local enabled = state.enabled and state.enabled[p.name]
+    if enabled ~= false then
+      if p.provider == "ollama" and not target then
+        target = p
+      elseif p.provider ~= "ollama" and p.api_key_name and Keys.get(p.name) then
+        target = p
+        break
+      end
+    end
+  end
+  return target
+end
+
+--- Deterministic post-save finish: default profile -> default mode -> guided
+--- policy -> one summary notification. Runs after the (optional) bootstrap
+--- pre-step. `state` is the freshly-persisted setup state.
+---@param state table
+---@param fields table
+---@param cb fun()
+function M.finish_setup(state, fields, cb)
+  cb = cb or function() end
+  fields = fields or {}
+
+  local Profiles = require("agent_core.profiles")
+  local Modes = require("agent_core.modes")
+  local Policy = require("agent_core.policy")
+  local Pickers = require("agent_core.pickers")
+
+  local function run_deterministic()
+    local function pick_mode()
+      Pickers.pick_mode(function(mode)
+        if mode then
+          Modes.switch(mode)
+        end
+        Policy.guided(function()
+          local Registry = require("agent_core.registry")
+          local p = Profiles.find(Profiles.get_active())
+          if p then
+            local guess = Policy.best_model(p.provider)
+            if guess and guess.model and guess.model ~= p.model then
+              Registry.set_active_model(p.provider, guess.model)
+            end
+            vim.g.agent_active_model = Profiles.effective_model(p)
+          end
+          vim.notify(
+            string.format(
+              "Agent ready: %s | %s | %s | %s",
+              vim.g.agent_active_profile or "(no profile)",
+              vim.g.agent_active_model or "(no model)",
+              vim.g.agent_mode or "(no mode)",
+              Policy.describe()
+            ),
+            vim.log.levels.INFO
+          )
+          cb()
+        end)
+      end)
+    end
+
+    if Profiles.get_active() then
+      pick_mode()
+      return
+    end
+
+    Pickers.pick_profile(function(profile)
+      if profile then
+        Profiles.switch(profile)
+      else
+        local target = derive_default_profile(state)
+        if target then
+          Profiles.switch(target)
+        end
+      end
+      pick_mode()
+    end)
+  end
+
+  if fields.bootstrap ~= false and M.config.bootstrap then
+    local Registry = require("agent_core.registry")
+    local enabled_entries = {}
+    for _, e in ipairs(Registry.list()) do
+      if e.enabled then
+        enabled_entries[#enabled_entries + 1] = e
+      end
+    end
+    M.bootstrap_suggest(enabled_entries, function(suggestion, _)
+      if suggestion then
+        M.present(suggestion, function(choice)
+          if choice == "Apply" then
+            M.live_apply(suggestion)
+          end
+          run_deterministic()
+        end)
+      else
+        run_deterministic()
+      end
+    end)
+    return
+  end
+
+  run_deterministic()
+end
+
 --- Save the wizard output: store keys, persist enabled set + remote endpoints,
---- re-derive the default active profile, then optionally bootstrap.
+--- then run the deterministic finish sequence (profile -> mode -> policy).
 ---@param fields {enabled:table<string,boolean>|nil, keys:table<string,string>|nil, endpoints:string[]|nil, bootstrap:boolean|nil}
 ---@param cb fun()|nil
 function M.save(fields, cb)
@@ -311,51 +432,7 @@ function M.save(fields, cb)
 
   M.save_state(state)
 
-  -- Re-derive the default active profile: first enabled cloud entry with a key,
-  -- else the first local profile.
-  local Profiles = require("agent_core.profiles")
-  local target
-  for _, p in ipairs(Profiles.all()) do
-    local enabled = state.enabled and state.enabled[p.name]
-    if enabled ~= false then
-      if p.provider == "ollama" and not target then
-        target = p
-      elseif p.provider ~= "ollama" and p.api_key_name and Keys.get(p.name) then
-        target = p
-        break
-      end
-    end
-  end
-  if target and not Profiles.get_active() then
-    Profiles.switch(target)
-  end
-
-  if fields.bootstrap ~= false and M.config.bootstrap then
-    local Registry = require("agent_core.registry")
-    local enabled_entries = {}
-    for _, e in ipairs(Registry.list()) do
-      if e.enabled then
-        enabled_entries[#enabled_entries + 1] = e
-      end
-    end
-    M.bootstrap_suggest(enabled_entries, function(suggestion, _)
-      if not suggestion then
-        cb()
-        return
-      end
-      M.present(suggestion, function(choice)
-        if choice == "Apply" then
-          M.live_apply(suggestion)
-          vim.notify("Applied policy: " .. require("agent_core.policy").describe(), vim.log.levels.INFO)
-        elseif choice == "Apply with edits" then
-          require("agent_core.policy").policy_cmd("")
-        end
-        cb()
-      end)
-    end)
-    return
-  end
-  cb()
+  M.finish_setup(state, fields, cb)
 end
 
 --- Render the form model into a reviewable scratch buffer (toggleable rows).
@@ -387,6 +464,8 @@ local function render_form(model)
   lines[#lines + 1] = ""
 
   local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].buftype = "acwrite"
+  vim.api.nvim_buf_set_name(buf, "agent_core://setup")
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
   vim.bo[buf].filetype = "markdown"
   vim.api.nvim_buf_set_keymap(buf, "n", "<CR>", "", { desc = "noop" })
@@ -448,21 +527,29 @@ function M.setup_cmd()
         next_row(1)
       end
 
-      collect_keys(model.rows, function()
-        local endpoints = model.endpoints
-        vim.ui.input({
-          prompt = "Extra Ollama endpoints (space-separated, blank to keep): ",
-          default = table.concat(endpoints, " "),
-        }, function(input)
-          local ep = {}
-          if input and input ~= "" then
-            for url in input:gmatch("%S+") do
-              ep[#ep + 1] = url
+      -- Run the interactive prompt chain OUTSIDE the BufWriteCmd autocmd so the
+      -- write command finishes first and the snacks input window can take focus.
+      vim.schedule(function()
+        collect_keys(model.rows, function()
+          local endpoints = model.endpoints
+          vim.ui.input({
+            prompt = "Extra Ollama endpoints (space-separated, blank to keep): ",
+            default = table.concat(endpoints, " "),
+          }, function(input)
+            if input == nil then
+              -- User cancelled the endpoint prompt (Esc / :qa): do not persist.
+              return
             end
-          end
-          vim.api.nvim_win_close(vim.api.nvim_get_current_win(), true)
-          M.save({ enabled = enabled, keys = keys, endpoints = ep }, function()
-            vim.notify("Agent setup saved", vim.log.levels.INFO)
+            local ep = {}
+            if input ~= "" then
+              for url in input:gmatch("%S+") do
+                ep[#ep + 1] = url
+              end
+            end
+            vim.api.nvim_win_close(vim.api.nvim_get_current_win(), true)
+            M.save({ enabled = enabled, keys = keys, endpoints = ep }, function()
+              vim.notify("Agent setup saved", vim.log.levels.INFO)
+            end)
           end)
         end)
       end)
