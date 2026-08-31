@@ -1,6 +1,6 @@
 ---@mod agent_core.ask Ask-the-user clarifying-questions tool
 ---@brief [[
---- Exposes an `ask_user` avante custom tool so an agent can ask the user a
+--- Exposes an `ask_user` custom tool so an agent can ask the user a
 --- clarifying question mid-task and wait for the answer, instead of guessing.
 --- This is the local analog of an agent's "ask clarifying questions" tool. The
 --- question is surfaced through vim.ui.input and the answer is returned to the
@@ -14,7 +14,7 @@ M.config = {
   enabled = true,
 }
 
----@type AvanteLLMTool
+---@type AgentTool
 local ask_user = {
   name = "ask_user",
   description = "Ask the user a clarifying question and wait for their answer. "
@@ -40,7 +40,7 @@ local ask_user = {
   },
 }
 
----@type AvanteLLMToolFunc<{ question: string }>
+---@type AgentToolFunc<{ question: string }>
 function ask_user.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"

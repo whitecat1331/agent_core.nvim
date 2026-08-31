@@ -132,7 +132,7 @@ function M.get_memory_prompt()
   return content
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local remember = {
   name = "remember",
   description = "Persist a fact or decision into long-term agent memory so future runs can recall it.",
@@ -153,7 +153,7 @@ local remember = {
     { name = "error", description = "Error message if storing failed.", type = "string", optional = true },
   },
 }
----@type AvanteLLMToolFunc<{ key: string, value: string }>
+---@type AgentToolFunc<{ key: string, value: string }>
 function remember.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -166,7 +166,7 @@ function remember.func(input, opts)
   opts.on_complete("remembered: " .. input.key, nil)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local recall = {
   name = "recall",
   description = "Recall a fact or decision previously stored in long-term agent memory.",
@@ -185,7 +185,7 @@ local recall = {
     { name = "error", description = "Error message if recall failed.", type = "string", optional = true },
   },
 }
----@type AvanteLLMToolFunc<{ key: string }>
+---@type AgentToolFunc<{ key: string }>
 function recall.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -198,7 +198,7 @@ function recall.func(input, opts)
   opts.on_complete(value, nil)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local forget = {
   name = "forget",
   description = "Delete a fact from long-term agent memory.",
@@ -217,7 +217,7 @@ local forget = {
     { name = "error", description = "Error message if forgetting failed.", type = "string", optional = true },
   },
 }
----@type AvanteLLMToolFunc<{ key: string }>
+---@type AgentToolFunc<{ key: string }>
 function forget.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"

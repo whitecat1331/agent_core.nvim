@@ -163,7 +163,7 @@ local function dispatch(input, opts, name, run)
   end
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local browser_open = {
   name = "browser_open",
   description = "Open a URL in a headless browser and return the page title and final URL.",
@@ -182,7 +182,7 @@ local browser_open = {
     { name = "error", description = "Error message if the browser is unavailable.", type = "string", optional = true },
   },
 }
----@type AvanteLLMToolFunc<{ url: string }>
+---@type AgentToolFunc<{ url: string }>
 function browser_open.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -199,7 +199,7 @@ function browser_open.func(input, opts)
   end)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local browser_screenshot = {
   name = "browser_screenshot",
   description = "Take a screenshot of a URL in a headless browser and save it to a file.",
@@ -225,7 +225,7 @@ local browser_screenshot = {
     { name = "error", description = "Error message if the browser is unavailable.", type = "string", optional = true },
   },
 }
----@type AvanteLLMToolFunc<{ url: string, path?: string }>
+---@type AgentToolFunc<{ url: string, path?: string }>
 function browser_screenshot.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -250,7 +250,7 @@ function browser_screenshot.func(input, opts)
   end)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local browser_snapshot = {
   name = "browser_snapshot",
   description = "Capture the readable text content of a URL in a headless browser.",
@@ -269,7 +269,7 @@ local browser_snapshot = {
     { name = "error", description = "Error message if the browser is unavailable.", type = "string", optional = true },
   },
 }
----@type AvanteLLMToolFunc<{ url: string }>
+---@type AgentToolFunc<{ url: string }>
 function browser_snapshot.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"

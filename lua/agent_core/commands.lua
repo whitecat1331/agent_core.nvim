@@ -326,7 +326,7 @@ function M.build_tool_description()
   return table.concat(parts, "\n")
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local run_command = {
   name = "run_command",
   description = "", -- populated at registration time
@@ -347,7 +347,7 @@ local run_command = {
     { name = "error", description = "Error message if the command failed.", type = "string", optional = true },
   },
 }
----@type AvanteLLMToolFunc<{ name: string, args?: table }>
+---@type AgentToolFunc<{ name: string, args?: table }>
 function run_command.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"

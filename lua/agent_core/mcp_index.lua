@@ -108,7 +108,7 @@ function M.write_global()
 
   local backup = path .. ".bak"
   if vim.fn.filereadable(path) == 1 and vim.fn.filereadable(backup) ~= 1 then
-    vim.fn.copy(path, backup)
+    vim.fn.writefile(vim.fn.readfile(path, "b"), backup, "b")
   end
 
   -- Drop agent_core-managed keys so they are always recomputed from the

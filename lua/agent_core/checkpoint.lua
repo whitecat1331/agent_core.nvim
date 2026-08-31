@@ -281,7 +281,7 @@ function M.setup()
   vim.fn.mkdir(M.dir(), "p")
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local checkpoint = {
   name = "checkpoint",
   description = "Snapshot the current working tree (tracked changes plus any untracked files) so it can be "
@@ -315,7 +315,7 @@ local checkpoint = {
   },
 }
 
----@type AvanteLLMToolFunc<{ label?: string }>
+---@type AgentToolFunc<{ label?: string }>
 function checkpoint.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -328,7 +328,7 @@ function checkpoint.func(input, opts)
   opts.on_complete("Checkpoint saved to " .. entry.path, nil)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local rollback = {
   name = "rollback",
   description = "Restore the working tree to a previous checkpoint by reversing its recorded patch and undoing "

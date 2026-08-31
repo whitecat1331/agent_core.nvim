@@ -1,10 +1,10 @@
----@mod agent_core.web Read-only web access tools for avante (web_fetch, web_search)
+---@mod agent_core.web Read-only web access tools (web_fetch, web_search)
 ---@brief [[
---- Exposes two read-only avante custom tools: `web_fetch` (retrieve a URL and
+--- Exposes two read-only custom tools: `web_fetch` (retrieve a URL and
 --- return readable plain text) and `web_search` (best-effort DuckDuckGo HTML
 --- search returning titles, URLs, and snippets). Both are network read-only, so
 --- they are safe to auto-approve in full modes. They run through `curl` and are
---- wired into avante's `custom_tools` (see the README wiring example).
+--- wired into the owned runtime's tool registry.
 ---@brief ]]
 
 local M = {}
@@ -79,7 +79,7 @@ local function curl(args, cb)
   end)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local web_fetch = {
   name = "web_fetch",
   description = "Fetch the content of a web URL and return it as readable plain text. "
@@ -114,7 +114,7 @@ local web_fetch = {
   },
 }
 
----@type AvanteLLMToolFunc<{ url: string }>
+---@type AgentToolFunc<{ url: string }>
 function web_fetch.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -169,7 +169,7 @@ function M.parse_ddg(html, max)
   return results
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local web_search = {
   name = "web_search",
   description = "Search the web (via DuckDuckGo) and return a list of result titles, URLs, "
@@ -211,7 +211,7 @@ local web_search = {
   },
 }
 
----@type AvanteLLMToolFunc<{ query: string, max_results?: integer }>
+---@type AgentToolFunc<{ query: string, max_results?: integer }>
 function web_search.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -254,12 +254,12 @@ function web_search.func(input, opts)
   end)
 end
 
---- Return the web_fetch custom tool for wiring into avante's `custom_tools`.
+--- Return the web_fetch custom tool for wiring into the owned runtime's tool registry.
 function M.web_fetch_tool()
   return web_fetch
 end
 
---- Return the web_search custom tool for wiring into avante's `custom_tools`.
+--- Return the web_search custom tool for wiring into the owned runtime's tool registry.
 function M.web_search_tool()
   return web_search
 end

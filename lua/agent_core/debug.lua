@@ -104,7 +104,7 @@ function M.remove_all()
   return removed, #remaining
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local add_debug_instrumentation = {
   name = "add_debug_instrumentation",
   description = "Record a temporary instrumentation snippet you just inserted so it can be removed later. "
@@ -145,7 +145,7 @@ local add_debug_instrumentation = {
   },
 }
 
----@type AvanteLLMToolFunc<{ file: string, text: string }>
+---@type AgentToolFunc<{ file: string, text: string }>
 function add_debug_instrumentation.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -175,7 +175,7 @@ function add_debug_instrumentation.func(input, opts)
   opts.on_complete("Recorded instrumentation in " .. abs .. " (" .. #entries .. " total snippet(s))", nil)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local remove_debug_instrumentation = {
   name = "remove_debug_instrumentation",
   description = "Remove every recorded instrumentation snippet (cleanup). Removes only the exact text that was "
@@ -208,7 +208,7 @@ function remove_debug_instrumentation.func(input, opts)
   opts.on_complete(string.format("Removed %d instrumentation snippet(s); %d already absent.", removed, remaining), nil)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local request_reproduction = {
   name = "request_reproduction",
   description = "Signal that instrumentation is complete and the user should now reproduce the bug. Call this and "
@@ -236,7 +236,7 @@ local request_reproduction = {
   },
 }
 
----@type AvanteLLMToolFunc<{ steps?: string }>
+---@type AgentToolFunc<{ steps?: string }>
 function request_reproduction.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -292,7 +292,7 @@ function M.read_evidence()
   return table.concat(chunks, "\n\n")
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local read_captured_logs = {
   name = "read_captured_logs",
   description = "Read captured runtime evidence: the tail of the configured log file and/or the output of the "
@@ -318,7 +318,7 @@ local read_captured_logs = {
   },
 }
 
----@type AvanteLLMToolFunc<{}>
+---@type AgentToolFunc<{}>
 function read_captured_logs.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"

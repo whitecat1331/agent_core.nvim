@@ -3,8 +3,8 @@
 --- Expands `@codebase <query>`, `@git <pr|issue> <n>`, `@web <query>`, and
 --- `@docs <path>` tokens in a submitted prompt into inline context blocks,
 --- pulling from ripgrep (codebase search), the `gh` CLI (git), the web_search
---- tool (web), and local files (docs). avante has no attach hook, so this is
---- the local analog: `M.expand(prompt, cb)` plus
+--- tool (web), and local files (docs). The owned runtime injects context
+--- separately, so this is the local analog: `M.expand(prompt, cb)` plus
 --- the `:AgentMentions` command that expands a selection and opens the result in
 --- a scratch buffer for review. The pure tokenizer (`M.find_mentions`) is exported
 --- for testing.

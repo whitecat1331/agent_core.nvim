@@ -1,6 +1,6 @@
----@mod agent_core.github GitHub context + write tool for avante (via the `gh` CLI)
+---@mod agent_core.github GitHub context + write tool (via the `gh` CLI)
 ---@brief [[
---- Exposes a single `github` avante custom tool that wraps the GitHub CLI (`gh`)
+--- Exposes a single `github` custom tool that wraps the GitHub CLI (`gh`)
 --- to pull PRs, issues, and search results into context, plus allowlisted write
 --- actions (create_pr, commit, comment, push). Read actions never mutate; write
 --- actions are explicitly allowlisted `gh`/`git` subcommands built from discrete
@@ -58,7 +58,7 @@ local function run_git(args, cb)
   end)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local github = {
   name = "github",
   description = "Query GitHub for pull requests, issues, and search results, and perform allowlisted "
@@ -150,7 +150,7 @@ local github = {
   },
 }
 
----@type AvanteLLMToolFunc<{ action: string, number?: integer, query?: string, search_type?: string, title?: string, body?: string, base?: string, head?: string, message?: string }>
+---@type AgentToolFunc<{ action: string, number?: integer, query?: string, search_type?: string, title?: string, body?: string, base?: string, head?: string, message?: string }>
 function github.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -252,7 +252,7 @@ function github.func(input, opts)
   end)
 end
 
---- Return the github custom tool for wiring into avante's `custom_tools`.
+--- Return the github custom tool for wiring into the owned runtime's tool registry.
 function M.github_tool()
   return github
 end

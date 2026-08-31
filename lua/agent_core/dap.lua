@@ -3,7 +3,7 @@
 --- Turns Debug mode from a print-instrumentation loop into a genuine interactive
 --- debugger the AI drives end-to-end: set breakpoints, launch, step over/into/out,
 --- inspect threads, stack frames, scopes and variables, and evaluate expressions —
---- all as avante custom tools. The bridge is a thin adapter over nvim-dap: it only
+--- all as custom tools. The bridge is a thin adapter over nvim-dap: it only
 --- speaks nvim-dap's generic API, so every DAP adapter (codelldb, delve, debugpy,
 --- js-debug, java-debug, netcoredbg, one-small-step-for-vimkind, ...) is supported
 --- without any per-language code here.
@@ -12,7 +12,7 @@
 --- on_complete callback until the debugger actually stops, then return the full
 --- paused state. From the model's perspective this is identical to an
 --- injected "paused at file:line" event — the tool_result is the injection channel,
---- so no avante fork is required.
+--- so no upstream fork is required.
 ---
 --- nvim-dap is soft-required: when it (or a debug adapter) is absent the tools
 --- return a clear error instead of throwing, and the existing instrumentation
@@ -807,7 +807,7 @@ local function run_and_await(command, opts)
   end)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local debug_list_adapters = {
   name = "debug_list_adapters",
   description = "List the debug adapters and launch configurations available via nvim-dap for the current buffer. "
@@ -832,7 +832,7 @@ local debug_list_adapters = {
   },
 }
 
----@type AvanteLLMToolFunc<{}>
+---@type AgentToolFunc<{}>
 function debug_list_adapters.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -848,7 +848,7 @@ function debug_list_adapters.func(input, opts)
   opts.on_complete(out, nil)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local debug_start = {
   name = "debug_start",
   description = "Launch a debug session by config name or inline config, optionally placing breakpoints first. "
@@ -897,7 +897,7 @@ local debug_start = {
   },
 }
 
----@type AvanteLLMToolFunc<{ config_name?: string, config?: table, breakpoints?: table[] }>
+---@type AgentToolFunc<{ config_name?: string, config?: table, breakpoints?: table[] }>
 function debug_start.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -934,7 +934,7 @@ function debug_start.func(input, opts)
   end, opts)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local debug_set_breakpoint = {
   name = "debug_set_breakpoint",
   description = "Set a breakpoint at an arbitrary file:line (1-based) with an optional condition, log message, "
@@ -984,7 +984,7 @@ local debug_set_breakpoint = {
   },
 }
 
----@type AvanteLLMToolFunc<{ file: string, line: number }>
+---@type AgentToolFunc<{ file: string, line: number }>
 function debug_set_breakpoint.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -997,7 +997,7 @@ function debug_set_breakpoint.func(input, opts)
   opts.on_complete(string.format("Breakpoint set at %s:%s", input.file, tostring(input.line)), nil)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local debug_clear_breakpoint = {
   name = "debug_clear_breakpoint",
   description = "Clear one breakpoint (file + 1-based line) or, with no arguments, all breakpoints.",
@@ -1024,7 +1024,7 @@ local debug_clear_breakpoint = {
   },
 }
 
----@type AvanteLLMToolFunc<{ file?: string, line?: number }>
+---@type AgentToolFunc<{ file?: string, line?: number }>
 function debug_clear_breakpoint.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -1037,7 +1037,7 @@ function debug_clear_breakpoint.func(input, opts)
   opts.on_complete("Breakpoint(s) cleared", nil)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local debug_continue = {
   name = "debug_continue",
   description = "Resume execution. Blocks until the debugger next stops (breakpoint/exception) or the program "
@@ -1058,7 +1058,7 @@ local debug_continue = {
   },
 }
 
----@type AvanteLLMToolFunc<{}>
+---@type AgentToolFunc<{}>
 function debug_continue.func(input, opts)
   local err = require_session(opts)
   if err then
@@ -1072,7 +1072,7 @@ function debug_continue.func(input, opts)
   end, opts)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local debug_step_over = {
   name = "debug_step_over",
   description = "Step over the current line. Blocks until the debugger stops and returns the new paused state.",
@@ -1092,7 +1092,7 @@ local debug_step_over = {
   },
 }
 
----@type AvanteLLMToolFunc<{}>
+---@type AgentToolFunc<{}>
 function debug_step_over.func(input, opts)
   local err = require_session(opts)
   if err then
@@ -1106,7 +1106,7 @@ function debug_step_over.func(input, opts)
   end, opts)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local debug_step_into = {
   name = "debug_step_into",
   description = "Step into the current call. Blocks until the debugger stops and returns the new paused state.",
@@ -1126,7 +1126,7 @@ local debug_step_into = {
   },
 }
 
----@type AvanteLLMToolFunc<{}>
+---@type AgentToolFunc<{}>
 function debug_step_into.func(input, opts)
   local err = require_session(opts)
   if err then
@@ -1140,7 +1140,7 @@ function debug_step_into.func(input, opts)
   end, opts)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local debug_step_out = {
   name = "debug_step_out",
   description = "Step out of the current function. Blocks until the debugger stops and returns the new paused state.",
@@ -1160,7 +1160,7 @@ local debug_step_out = {
   },
 }
 
----@type AvanteLLMToolFunc<{}>
+---@type AgentToolFunc<{}>
 function debug_step_out.func(input, opts)
   local err = require_session(opts)
   if err then
@@ -1174,7 +1174,7 @@ function debug_step_out.func(input, opts)
   end, opts)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local debug_pause = {
   name = "debug_pause",
   description = "Interrupt a running debuggee. Blocks until it pauses and returns the paused state.",
@@ -1200,7 +1200,7 @@ local debug_pause = {
   },
 }
 
----@type AvanteLLMToolFunc<{ threadId?: number }>
+---@type AgentToolFunc<{ threadId?: number }>
 function debug_pause.func(input, opts)
   local err = require_session(opts)
   if err then
@@ -1214,7 +1214,7 @@ function debug_pause.func(input, opts)
   end, opts)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local debug_get_state = {
   name = "debug_get_state",
   description = "Non-blocking snapshot of the debugger: paused state, threads/frames/scopes/variables (from the last "
@@ -1235,7 +1235,7 @@ local debug_get_state = {
   },
 }
 
----@type AvanteLLMToolFunc<{}>
+---@type AgentToolFunc<{}>
 function debug_get_state.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -1262,7 +1262,7 @@ function debug_get_state.func(input, opts)
   opts.on_complete(body, nil)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local debug_get_variables = {
   name = "debug_get_variables",
   description = "Expand a variablesReference (from a scope or variable) into its child variables.",
@@ -1291,7 +1291,7 @@ local debug_get_variables = {
   },
 }
 
----@type AvanteLLMToolFunc<{ variablesReference: number }>
+---@type AgentToolFunc<{ variablesReference: number }>
 function debug_get_variables.func(input, opts)
   local err = require_session(opts)
   if err then
@@ -1314,7 +1314,7 @@ function debug_get_variables.func(input, opts)
   end)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local debug_evaluate = {
   name = "debug_evaluate",
   description = "Evaluate an expression in the paused frame (optionally specifying a frame id).",
@@ -1349,7 +1349,7 @@ local debug_evaluate = {
   },
 }
 
----@type AvanteLLMToolFunc<{ expression: string, frameId?: number }>
+---@type AgentToolFunc<{ expression: string, frameId?: number }>
 function debug_evaluate.func(input, opts)
   local err = require_session(opts)
   if err then
@@ -1386,7 +1386,7 @@ function debug_evaluate.func(input, opts)
   end)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local debug_stop = {
   name = "debug_stop",
   description = "Terminate (or disconnect) the current debug session.",
@@ -1406,7 +1406,7 @@ local debug_stop = {
   },
 }
 
----@type AvanteLLMToolFunc<{}>
+---@type AgentToolFunc<{}>
 function debug_stop.func(input, opts)
   local err = require_session(opts)
   if err then
@@ -1419,7 +1419,7 @@ function debug_stop.func(input, opts)
   opts.on_complete("Debug session terminated", nil)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local debug_restart = {
   name = "debug_restart",
   description = "Restart the current debug session. Blocks until the debugger stops and returns the paused state.",
@@ -1439,7 +1439,7 @@ local debug_restart = {
   },
 }
 
----@type AvanteLLMToolFunc<{}>
+---@type AgentToolFunc<{}>
 function debug_restart.func(input, opts)
   local err = require_session(opts)
   if err then

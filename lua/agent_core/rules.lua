@@ -343,7 +343,7 @@ function M.read(name)
   return nil, "no rule named '" .. tostring(name) .. "'"
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local read_rule = {
   name = "read_rule",
   description = "Read a rule's full body by name. Use when an on-demand rule listed in the rules block applies to the current task.",
@@ -362,7 +362,7 @@ local read_rule = {
     { name = "error", description = "Error message if the rule was not found.", type = "string", optional = true },
   },
 }
----@type AvanteLLMToolFunc<{ name: string }>
+---@type AgentToolFunc<{ name: string }>
 function read_rule.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"

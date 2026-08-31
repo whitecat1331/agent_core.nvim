@@ -251,7 +251,7 @@ function M.invoke(name, arg)
   return body, nil
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local read_skill = {
   name = "read_skill",
   description = "Read a saved skill's full procedure by name. Use when a task matches a skill listed in the Skills index.",
@@ -270,7 +270,7 @@ local read_skill = {
     { name = "error", description = "Error message if the skill was not found.", type = "string", optional = true },
   },
 }
----@type AvanteLLMToolFunc<{ name: string }>
+---@type AgentToolFunc<{ name: string }>
 function read_skill.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -314,7 +314,7 @@ function M.read_skill_tool()
   return read_skill
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local run_skill = {
   name = "run_skill",
   description = "Run a user-invocable skill by name and return its procedure with the argument substituted. "
@@ -341,7 +341,7 @@ local run_skill = {
     { name = "error", description = "Error message if the skill was not found.", type = "string", optional = true },
   },
 }
----@type AvanteLLMToolFunc<{ name: string, argument?: string }>
+---@type AgentToolFunc<{ name: string, argument?: string }>
 function run_skill.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
