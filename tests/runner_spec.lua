@@ -30,4 +30,17 @@ h.describe("runner", function()
     })
     h.equals("image/png", content[2].source.media_type)
   end)
+
+  h.it("build_system_prompt injects the profile persona when set", function()
+    vim.g.agent_persona = "PROFILE_PERSONA_MARKER"
+    local out = Runner.build_system_prompt(nil)
+    h.truthy(out:find("PROFILE_PERSONA_MARKER", 1, true), "profile persona should be present")
+    vim.g.agent_persona = nil
+  end)
+
+  h.it("build_system_prompt omits the profile persona when empty", function()
+    vim.g.agent_persona = nil
+    local out = Runner.build_system_prompt(nil)
+    h.falsy(out:find("PROFILE_PERSONA_MARKER", 1, true), "no persona marker when unset")
+  end)
 end)

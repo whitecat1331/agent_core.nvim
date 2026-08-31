@@ -5,7 +5,7 @@
 --- a headless SDK runtime and Automations. `M.run(prompt, opts, cb)` resolves
 --- a profile, assembles the same system prompt the interactive agent gets
 --- (mode persona + brief + rules + notepad + memory), and streams through
---- avante's own `Llm.curl` client (no direct HTTP), so it honors every configured
+--- the owned provider transport (no direct HTTP), so it honors every configured
 --- provider. `M.llm_curl` is the low-level single-shot primitive shared by the
 --- completion engine and bugbot review fan-out.
 ---@brief ]]
@@ -40,23 +40,38 @@ function M.resolve_profile(name)
   return nil
 end
 
---- Env-first API-key resolution and export, mirroring profiles.switch.
+--- Env-first API-key resolution (explicit profile key > environment > keys store).
+--- The owned runtime passes the resolved key directly to the provider transport,
+--- so nothing needs to be exported into the process environment.
 ---@param profile table
-local function export_key(profile)
+---@return string|nil
+function M.resolve_key(profile)
+  if not profile then
+    return nil
+  end
+  if profile.api_key and profile.api_key ~= "" then
+    return profile.api_key
+  end
   if profile.api_key_name and profile.api_key_name ~= "" then
-    local Keys = require("agent_core.keys")
-    local key = profile.api_key or os.getenv(profile.api_key_name) or Keys.get(profile.name)
+    local key = os.getenv(profile.api_key_name)
     if key and key ~= "" then
-      vim.fn.setenv(profile.api_key_name, key)
-      vim.fn.setenv("AVANTE_" .. profile.api_key_name, key)
+      return key
+    end
+    local ok, Keys = pcall(require, "agent_core.keys")
+    if ok then
+      local k = Keys.get(profile.name)
+      if k and k ~= "" then
+        return k
+      end
     end
   end
+  return nil
 end
 
 --- Build the user-message content for a completion call. When `opts.images` is
 --- present (a list of `{ data, media_type }` base64 image parts), produce the
---- multimodal array form avante accepts; otherwise keep the plain string form
---- every existing caller relies on. Exported for unit testing.
+--- multimodal array form the owned runtime accepts; otherwise keep the plain
+--- string form every existing caller relies on. Exported for unit testing.
 ---@param opts table
 ---@return string|table
 function M.build_user_content(opts)
@@ -79,93 +94,76 @@ function M.build_user_content(opts)
   return parts
 end
 
---- Single-shot chat completion through avante's own client. `opts.images`
+--- Single-shot chat completion through the owned provider registry. `opts.images`
 --- (optional) is a list of `{ data, media_type }` base64 image parts, enabling
 --- multimodal/vision prompts; it has no effect on the plain-text path.
 ---@param profile table
----@param opts { system_prompt:string, user_prompt:string, on_chunk:fun(chunk:string)|nil, images:table[]|nil }
+---@param opts { system_prompt:string, user_prompt:string, on_chunk:fun(chunk:string)|nil, images:table[]|nil, timeout_ms?:number }
 ---@param cb fun(result: { text:string|nil, error:string|nil })
 function M.llm_curl(profile, opts, cb)
-  local ok_llm, Llm = pcall(require, "avante.llm")
-  if not ok_llm or not Llm.curl then
-    cb({ error = "avante.llm not available" })
-    return
-  end
-  local ok_prov, Providers = pcall(require, "avante.providers")
-  if not ok_prov then
-    cb({ error = "avante.providers not available" })
-    return
-  end
+  local Providers = require("agent_core.runtime.providers")
 
-  export_key(profile)
-
-  local provider = Providers[profile.provider]
-  if not provider then
-    cb({ error = "provider not found: " .. tostring(profile.provider) })
-    return
-  end
-
-  local original_model = provider.model
-  if profile.model then
-    provider.model = profile.model
-  end
-
-  local response = ""
   local done = false
   local function finish(result, err)
     if done then
       return
     end
     done = true
-    provider.model = original_model
     cb({ text = result, error = err })
   end
 
-  local timeout_ms = M.config.timeout_ms or 120000
+  local timeout_ms = opts.timeout_ms or M.config.timeout_ms or 120000
   vim.defer_fn(function()
     finish(nil, "timed out after " .. tostring(timeout_ms) .. "ms")
   end, timeout_ms)
 
-  local ok = pcall(Llm.curl, {
-    provider = provider,
-    prompt_opts = {
-      system_prompt = opts.system_prompt,
-      messages = {
-        { role = "user", content = M.build_user_content(opts) },
-      },
+  local ok, err = Providers.stream({
+    provider = profile.provider,
+    model = require("agent_core.profiles").effective_model(profile),
+    api_key = M.resolve_key(profile),
+    endpoint = profile.endpoint,
+    api_key_name = profile.api_key_name,
+    system = opts.system_prompt,
+    messages = {
+      { role = "user", content = M.build_user_content(opts) },
     },
-    handler_opts = {
-      on_start = function() end,
-      on_chunk = function(chunk)
-        if chunk then
-          response = response .. chunk
-          if opts.on_chunk then
-            opts.on_chunk(chunk)
-          end
-        end
-      end,
-      on_stop = function(stop_opts)
-        if stop_opts and stop_opts.error ~= nil then
-          finish(nil, tostring(stop_opts.error))
-          return
-        end
-        finish(response ~= "" and response or nil, nil)
-      end,
-    },
+    timeout_ms = timeout_ms,
+    on_chunk = opts.on_chunk,
+    on_stop = function(res)
+      if res.error then
+        finish(nil, tostring(res.error))
+        return
+      end
+      finish(res.text ~= "" and res.text or nil, nil)
+    end,
   })
   if not ok then
-    finish(nil, "avante.llm.curl failed")
+    finish(nil, tostring(err))
   end
 end
 
---- Assemble the system prompt the interactive agent would receive (mode persona +
---- brief + rules + notepad + memory), bounded to a reasonable default.
+--- Assemble the system prompt the interactive agent would receive (profile
+--- persona + mode persona + brief + rules + notepad + memory), bounded to a
+--- reasonable default.
 ---@param mode_name string|nil
 ---@return string
 function M.build_system_prompt(mode_name)
   local parts = { "You are a senior software engineer. Provide a thorough, self-contained answer." }
 
   local core = require("agent_core")
+
+  local function add(fn)
+    if not fn then
+      return
+    end
+    local ok, text = pcall(fn)
+    if ok and text and text ~= "" then
+      parts[#parts + 1] = text
+    end
+  end
+
+  add(core.get_profile_persona) -- profile identity, before mode behavior
+
   if mode_name and mode_name ~= "" then
     local mode = require("agent_core.modes").find(mode_name)
     if mode and mode.system_prompt then
@@ -178,15 +176,6 @@ function M.build_system_prompt(mode_name)
     end
   end
 
-  local function add(fn)
-    if not fn then
-      return
-    end
-    local ok, text = pcall(fn)
-    if ok and text and text ~= "" then
-      parts[#parts + 1] = text
-    end
-  end
   add(core.get_brief_prompt)
   add(core.get_context_prompt)
   add(core.get_rules_prompt)
