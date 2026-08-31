@@ -55,5 +55,6 @@ require("tests.runtime_parity_spec")
 require("tests.coordinator_spec")
 require("tests.debug_spec")
 require("tests.session_edits_spec")
+require("tests.plan_spec")
 
 require("tests.harness").run()
