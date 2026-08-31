@@ -227,13 +227,14 @@ function M.autofix(findings, cb)
   end
   local fix_prompt = "Apply the following review fixes:\n\n" .. table.concat(fix_lines, "\n")
 
-  local ok_llm, Llm = pcall(require, "avante.llm")
-  if not ok_llm or not Llm.agent_loop then
-    cb(nil, "avante.llm.agent_loop not available")
+  local Runner = require("agent_core.runner")
+  local profile = Runner.resolve_profile(M.config.review_profile)
+  if not profile then
+    cb(nil, "no profile resolved for autofix")
     return
   end
-  local ok_tools, Tools = pcall(require, "avante.llm_tools")
-  local tools = (ok_tools and Tools.get_tools and Tools.get_tools("", {})) or {}
+  local Session = require("agent_core.runtime.session")
+  local tools = require("agent_core.runtime.tools").full_set(require("agent_core").get_custom_tools())
 
   local original_cwd = vim.fn.getcwd()
   vim.fn.chdir(dir)
@@ -253,7 +254,13 @@ function M.autofix(findings, cb)
     finish(nil, "autofix subagent timed out")
   end, M.config.timeout_ms or 300000)
 
-  Llm.agent_loop({
+  Session.new({
+    provider = profile.provider,
+    model = profile.model,
+    api_key = Runner.resolve_key(profile),
+    endpoint = profile.endpoint,
+    api_key_name = profile.api_key_name,
+  }):run({
     system_prompt = string.format(
       [[You are a code-fix subagent. Working directory: %s
 
@@ -269,10 +276,8 @@ Apply each fix using your edit tools, then call `attempt_completion` with a summ
     on_messages_add = function(msgs)
       msgs = vim.islist(msgs) and msgs or { msgs }
       for _, msg in ipairs(msgs) do
-        local History = require("avante.history")
-        local tool_use = History.Helpers.get_tool_use_data(msg)
-        if tool_use and tool_use.name == "attempt_completion" and tool_use.input and tool_use.input.result then
-          result = tool_use.input.result
+        if msg.role == "tool" and msg.name == "attempt_completion" then
+          result = msg.content
         end
       end
     end,
@@ -379,7 +384,7 @@ function M.bugbot_cmd(arg)
   end)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local bugbot = {
   name = "bugbot",
   description = "Run a local Bugbot review of the current working tree (or branch vs base) and return findings. "
@@ -406,7 +411,7 @@ local bugbot = {
     { name = "error", description = "Error message if the review failed.", type = "string", optional = true },
   },
 }
----@type AvanteLLMToolFunc<{ action?: string, base?: string }>
+---@type AgentToolFunc<{ action?: string, base?: string }>
 function bugbot.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"

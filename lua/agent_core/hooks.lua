@@ -1,15 +1,15 @@
 ---@mod agent_core.hooks Agent lifecycle hooks (before/after prompt, tool, run end)
 ---@brief [[
 --- Emits lifecycle events so users can extend agent_core with their own Lua:
----   before_prompt / after_prompt   around avante's AvanteInputSubmitted
+---   before_prompt / after_prompt   around the owned AgentInputSubmitted event
 ---   before_tool   / after_tool     around agent_core's own custom tools
 ---   on_run_end                     when a headless run completes
 --- Each event fires a `User` autocmd (AgentHookBeforePrompt, AgentHookBeforeTool,
 --- etc.) and invokes the matching callback in `config.hooks` when present.
 ---
 --- Scope note: `before/after_tool` wraps agent_core custom tools only (they are
---- wired through `get_custom_tools()`). avante built-ins (bash/write_to_file) are
---- not wrapped without an upstream avante fork.
+--- wired through `get_custom_tools()`). The owned built-ins (bash/write_to_file)
+--- are dispatched through agent_core.runtime.tools, not wrapped here.
 ---@brief ]]
 
 local M = {}
@@ -51,8 +51,8 @@ function M.emit(event, data)
 end
 
 --- Wrap an agent_core custom tool so its func emits before_tool/after_tool.
----@param tool AvanteLLMTool
----@return AvanteLLMTool
+---@param tool AgentTool
+---@return AgentTool
 function M.wrap(tool)
   if not tool or type(tool) ~= "table" or not tool.func then
     return tool
@@ -74,8 +74,8 @@ function M.wrap(tool)
 end
 
 --- Wrap every tool in a list.
----@param tools AvanteLLMTool[]
----@return AvanteLLMTool[]
+---@param tools AgentTool[]
+---@return AgentTool[]
 function M.wrap_all(tools)
   local out = {}
   for _, t in ipairs(tools) do
@@ -88,10 +88,10 @@ function M.setup()
   local cfg = require("agent_core").config
   M.config = vim.tbl_deep_extend("force", M.config, cfg.hooks or {})
 
-  -- before/after_prompt around avante's input-submitted event.
+  -- before/after_prompt around the owned input-submitted event.
   vim.api.nvim_create_autocmd("User", {
     group = group,
-    pattern = "AvanteInputSubmitted",
+    pattern = "AgentInputSubmitted",
     callback = function(ev)
       local input = ev.data and ev.data.input or ""
       M.emit("before_prompt", { input = input })

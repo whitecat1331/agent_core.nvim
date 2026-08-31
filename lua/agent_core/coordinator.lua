@@ -1,7 +1,7 @@
 ---@mod agent_core.coordinator Recommendation merger.
 ---@brief [[
 --- Single entry point for prompt-driven recommendations. Registers one
---- `AvanteInputSubmitted` autocmd, runs the mode recommender and the agent
+--- `AgentInputSubmitted` autocmd, runs the mode recommender and the agent
 --- autoswitch in parallel, and merges their results into a single interactive
 --- prompt (switch both / switch one / ignore) instead of two sequential prompts.
 ---@brief ]]
@@ -142,7 +142,7 @@ function M.setup()
   end
   M._registered = true
   vim.api.nvim_create_autocmd("User", {
-    pattern = "AvanteInputSubmitted",
+    pattern = "AgentInputSubmitted",
     callback = function()
       local ev = vim.v.event
       local request = ev and ev.request

@@ -1,6 +1,6 @@
 ---@mod agent_core.recommend Mode-realm recommendation.
 ---@brief [[
---- Listens for avante's `AvanteInputSubmitted` User autocmd and classifies each
+--- Listens for the owned `AgentInputSubmitted` User autocmd and classifies each
 --- prompt against the active mode's "realm" (its keywords). When a prompt is a
 --- poor fit for the active mode, recommends switching to the best-fit mode with
 --- an interactive Switch/Ignore prompt.
@@ -9,7 +9,8 @@
 ---   1. A fast, offline keyword heuristic scores every mode (sum of weighted
 ---      keyword hits). High-confidence results short-circuit.
 ---   2. Low-confidence results optionally trigger a one-shot LLM classification
----      via avante's own client, falling back to the heuristic on any failure.
+---      via the owned provider transport, falling back to the heuristic on any
+---      failure.
 ---@brief ]]
 
 local M = {}
@@ -81,11 +82,11 @@ local function score_modes(ltext)
 
   local scored = {}
   for _, mode in ipairs(modes.all()) do
-    local score = 0
+    local kw_score = 0
     for _, k in ipairs(mode.keywords or {}) do
       local phrase, weight = norm_keyword(k)
       if phrase and phrase ~= "" and ltext:find(phrase, 1, true) then
-        score = score + weight
+        kw_score = kw_score + weight
       end
     end
 
@@ -96,21 +97,24 @@ local function score_modes(ltext)
       for _, verb in ipairs(IMPERATIVE_VERBS) do
         if ltext:find(verb, 1, true) then
           if mode.name == "debug" and verb == "fix" then
-            score = score + 1
+            kw_score = kw_score + 1
           elseif mode.name == "agent" then
-            score = score + 0.5
+            kw_score = kw_score + 0.5
           end
           break
         end
       end
     end
 
-    -- Policy bias (ask_first -> plan/ask; good -> plan).
+    -- Policy bias (ask_first -> plan/ask; good -> plan). This is a ranking
+    -- signal only — it never counts toward kw_score, so a prompt that matched
+    -- no keyword still classifies as nil.
+    local score = kw_score
     if pol then
       score = score + pol.mode_bonus(mode.name)
     end
 
-    scored[#scored + 1] = { mode = mode.name, score = score }
+    scored[#scored + 1] = { mode = mode.name, score = score, kw_score = kw_score }
   end
 
   table.sort(scored, function(a, b)
@@ -126,7 +130,7 @@ function M.heuristic_classify(text)
   local ltext = text:lower()
   local scored = score_modes(ltext)
   local top = scored[1]
-  if not top or top.score <= 0 then
+  if not top or top.kw_score <= 0 then
     return nil
   end
   local runner_up = scored[2] or { score = 0 }
@@ -134,8 +138,8 @@ function M.heuristic_classify(text)
   return { mode = top.mode, score = top.score, confidence = confidence }
 end
 
---- One-shot LLM classification. Calls avante's own curl client; falls back to
---- the heuristic result (via cb with a nil mode) if the model is unavailable,
+--- One-shot LLM classification. Calls the owned provider transport; falls back
+--- to the heuristic result (via cb with a nil mode) if the model is unavailable,
 --- fails, or times out.
 --- @param text string
 --- @param cb fun(mode: string|nil)
@@ -146,19 +150,9 @@ function M.llm_classify(text, cb)
     cb(nil)
     return
   end
-  local ok_llm, Llm = pcall(require, "avante.llm")
-  if not ok_llm or not Llm.curl then
-    cb(nil)
-    return
-  end
-  local ok_prov, Providers = pcall(require, "avante.providers")
-  local ok_cfg, Config = pcall(require, "avante.config")
-  if not ok_prov or not ok_cfg or not Config.provider then
-    cb(nil)
-    return
-  end
-  local provider = Providers[Config.provider]
-  if not provider then
+
+  local profile = require("agent_core.runner").resolve_profile(nil)
+  if not profile then
     cb(nil)
     return
   end
@@ -169,20 +163,13 @@ function M.llm_classify(text, cb)
   for _, m in ipairs(get_modes().all()) do
     labels[#labels + 1] = m.name .. ": " .. (m.when_to_use or "")
   end
-  local messages = {
-    {
-      role = "user",
-      content = table.concat({
-        "Classify this request as the single best-fit mode.",
-        "Modes:\n" .. table.concat(labels, "\n"),
-        "Request: " .. text,
-      }, "\n\n"),
-    },
-  }
+  local user_prompt = table.concat({
+    "Classify this request as the single best-fit mode.",
+    "Modes:\n" .. table.concat(labels, "\n"),
+    "Request: " .. text,
+  }, "\n\n")
 
-  local response = ""
   local done = false
-
   local function finish(mode)
     if done then
       return
@@ -196,40 +183,25 @@ function M.llm_classify(text, cb)
     finish(nil)
   end, 15000)
 
-  local ok = pcall(Llm.curl, {
-    provider = provider,
-    prompt_opts = {
-      system_prompt = system_prompt,
-      messages = messages,
-    },
-    handler_opts = {
-      on_start = function() end,
-      on_chunk = function(chunk)
-        if not chunk then
-          return
-        end
-        response = response .. chunk
-      end,
-      on_stop = function(stop_opts)
-        if stop_opts and stop_opts.error ~= nil then
-          finish(nil)
-          return
-        end
-        response = response:gsub("```", ""):lower()
-        local word = response:match("(%a+)")
-        for _, name in ipairs(MODE_NAMES) do
-          if word == name then
-            finish(name)
-            return
-          end
-        end
-        finish(nil)
-      end,
-    },
-  })
-  if not ok then
+  require("agent_core.runner").llm_curl(profile, {
+    system_prompt = system_prompt,
+    user_prompt = user_prompt,
+    timeout_ms = 15000,
+  }, function(result)
+    if result.error then
+      finish(nil)
+      return
+    end
+    local response = (result.text or ""):gsub("```", ""):lower()
+    local word = response:match("(%a+)")
+    for _, name in ipairs(MODE_NAMES) do
+      if word == name then
+        finish(name)
+        return
+      end
+    end
     finish(nil)
-  end
+  end)
 end
 
 --- Build a switch descriptor for a target mode, or nil if already active.
@@ -269,7 +241,7 @@ function M.classify(text, cb)
     cb(nil)
     return
   end
-  -- Skip avante's internally generated "handover document" prompt.
+  -- Skip the internally generated "handover document" prompt.
   if text:find("handover document to be stored in the AGENTS.md", 1, true) then
     cb(nil)
     return

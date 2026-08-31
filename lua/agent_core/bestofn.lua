@@ -2,8 +2,8 @@
 ---@brief [[
 --- Fans a single prompt out to N configured profiles and presents their outputs
 --- side-by-side in a scratch buffer, mirroring a best-of-n comparison. Each profile
---- is queried concurrently with its own provider/model/API key through avante's
---- own `Llm.curl` client (no direct HTTP), using a per-run provider copy so the
+--- is queried concurrently with its own provider/model/API key through the owned
+--- provider transport (no direct HTTP), using a per-run provider copy so the
 --- shared provider model is never mutated. Results are gathered in profile order,
 --- then shown in a single read-only buffer so the user can scroll, compare, and
 --- copy the winning answer.
@@ -61,90 +61,18 @@ function M.resolve_profiles()
 end
 
 --- Run one profile against the prompt and deliver its output via cb.
---- Uses avante's own client, so it honors the provider's endpoint, auth, and
---- streaming exactly as a normal chat would.
+--- Delegates to the owned runner single-shot primitive, so each profile's
+--- provider/model/API key stream concurrently with no shared mutable state.
 ---@param profile table
 ---@param system_prompt string
 ---@param user_prompt string
 ---@param cb fun(result: {text:string|nil, error:string|nil})
 local function run_profile(profile, system_prompt, user_prompt, cb)
-  local ok_llm, Llm = pcall(require, "avante.llm")
-  if not ok_llm or not Llm.curl then
-    cb({ error = "avante.llm not available" })
-    return
-  end
-  local ok_prov, Providers = pcall(require, "avante.providers")
-  if not ok_prov then
-    cb({ error = "avante.providers not available" })
-    return
-  end
-
-  -- Env-first API-key resolution, mirroring agent_core.profiles.switch. Keys
-  -- are set up-front so the provider's parse_api_key() finds them.
-  if profile.api_key_name and profile.api_key_name ~= "" then
-    local Keys = require("agent_core.keys")
-    local key = profile.api_key or os.getenv(profile.api_key_name) or Keys.get(profile.name)
-    if key and key ~= "" then
-      vim.fn.setenv(profile.api_key_name, key)
-      vim.fn.setenv("AVANTE_" .. profile.api_key_name, key)
-    end
-  end
-
-  local provider = Providers[profile.provider]
-  if not provider then
-    cb({ error = "provider not found: " .. tostring(profile.provider) })
-    return
-  end
-
-  -- Copy the provider per run so concurrent best-of-n runs never clobber the
-  -- shared provider's model.
-  provider = vim.deepcopy(provider)
-  if profile.model then
-    provider.model = profile.model
-  end
-
-  local response = ""
-  local done = false
-  local function finish(result, err)
-    if done then
-      return
-    end
-    done = true
-    cb({ text = result, error = err })
-  end
-
-  local timeout_ms = M.config.timeout_ms or 60000
-  vim.defer_fn(function()
-    finish(nil, "timed out after " .. tostring(timeout_ms) .. "ms")
-  end, timeout_ms)
-
-  local ok = pcall(Llm.curl, {
-    provider = provider,
-    prompt_opts = {
-      system_prompt = system_prompt,
-      messages = {
-        { role = "user", content = user_prompt },
-      },
-    },
-    handler_opts = {
-      on_start = function() end,
-      on_chunk = function(chunk)
-        if chunk then
-          response = response .. chunk
-        end
-      end,
-      on_stop = function(stop_opts)
-        if stop_opts and stop_opts.error ~= nil then
-          finish(nil, tostring(stop_opts.error))
-          return
-        end
-        finish(response ~= "" and response or nil, nil)
-      end,
-    },
-  })
-  if not ok then
-    finish(nil, "avante.llm.curl failed")
-  end
+  require("agent_core.runner").llm_curl(profile, {
+    system_prompt = system_prompt,
+    user_prompt = user_prompt,
+    timeout_ms = M.config.timeout_ms or 60000,
+  }, cb)
 end
 
 --- Run `prompt` across every resolved profile concurrently, then deliver the

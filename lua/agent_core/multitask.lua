@@ -1,16 +1,16 @@
 ---@mod agent_core.multitask Write-capable parallel subagents for Multi-task mode
 ---@brief [[
---- Registers a `run_agent` custom tool (wired into avante's `custom_tools`)
---- that fans out subagents on avante's agent loop. Unlike avante's built-in
---- `dispatch_agent` (read-only research), `run_agent` subagents get the full
---- write-capable tool set and can optionally run in an isolated git worktree.
+--- Registers a `run_agent` custom tool (wired into the owned runtime's tool
+--- registry) that fans out subagents on the owned agent loop. Unlike the
+--- read-only research path, `run_agent` subagents get the full write-capable
+--- tool set and can optionally run in an isolated git worktree.
 ---
 --- The model emits multiple `run_agent` tool calls in a single message to run
---- them concurrently; avante already processes those tool calls in parallel.
+--- them concurrently; the owned runtime processes those tool calls in parallel.
 --- Parallel fan-out uses the shared tree (worktree = false). Worktree isolation
---- is sequential-only: avante has no per-agent cwd, and the global chdir would
---- collide across concurrent worktree runs, so a second worktree run is rejected
---- while one is active.
+--- is sequential-only: a worktree run needs an isolated cwd, and the global
+--- chdir would collide across concurrent worktree runs, so a second worktree
+--- run is rejected while one is active.
 ---@brief ]]
 
 local M = {}
@@ -20,17 +20,46 @@ local M = {}
 -- rejects concurrent worktree runs and steers the model to worktree = false.
 local active_worktrees = 0
 
---- Full tool set for a subagent, resolved from avante's live registry so it
---- tracks custom tools and disabled_tools automatically. When `allowlist` is
---- non-empty, only those tool names are exposed to the subagent.
----@param allowlist string[]|nil
----@return AvanteLLMTool[]
-local function resolve_tools(allowlist)
-  local ok, Tools = pcall(require, "avante.llm_tools")
-  if not ok or not Tools.get_tools then
-    return {}
+--- Resolve a transient profile for a run_agent `profile`/`model` override, or
+--- (nil, nil) when no override is requested. Returns (nil, err) on failure.
+---@param input table
+---@return table|nil
+---@return string|nil
+local function resolve_override_profile(input)
+  local Profiles = require("agent_core.profiles")
+  local has_profile = input.profile ~= nil and input.profile ~= ""
+  local has_model = input.model ~= nil and input.model ~= ""
+
+  local profile
+  if has_profile then
+    profile = Profiles.find(input.profile)
+    if not profile then
+      return nil, "unknown profile: " .. tostring(input.profile)
+    end
+  elseif has_model then
+    local active_name = Profiles.get_active()
+    profile = active_name and Profiles.find(active_name) or nil
+    if not profile then
+      return nil, "no active profile to override; pass `profile` instead"
+    end
+  else
+    return nil, nil
   end
-  local all = Tools.get_tools("", {}) or {}
+
+  if has_model then
+    profile = vim.deepcopy(profile)
+    profile.model = input.model
+  end
+  return profile, nil
+end
+
+--- Full tool set for a subagent: the owned built-ins (bash/file/glob/grep/todos)
+--- plus agent_core's custom tools, so subagents get write-capable parity. When
+--- `allowlist` is non-empty, only those tool names are exposed to the subagent.
+---@param allowlist string[]|nil
+---@return AgentTool[]
+local function resolve_tools(allowlist)
+  local all = require("agent_core.runtime.tools").full_set(require("agent_core").get_custom_tools())
   if not allowlist or #allowlist == 0 then
     return all
   end
@@ -72,8 +101,6 @@ local function remove_worktree(root, dir)
   vim.fn.systemlist({ "git", "-C", root, "worktree", "remove", "--force", dir })
 end
 
----@class AvanteLLMToolParam
----@class AvanteLLMToolReturn
 local M_tool = {}
 
 M_tool.name = "run_agent"
@@ -94,7 +121,8 @@ USAGE:
 - Each subagent is stateless: give it a highly detailed, self-contained prompt and say exactly what to return.
 - The subagent returns its final `attempt_completion` summary to you; that summary is NOT visible to the user, so synthesize and report it yourself.
 - Set `worktree = true` to isolate a subagent in its own git worktree. Worktrees are sequential-only (only one at a time); use the shared tree (default) for parallel fan-out.
-- Set `tools` to restrict which tools a subagent may use (an allowlist of tool names).]]
+- Set `tools` to restrict which tools a subagent may use (an allowlist of tool names).
+- Set `profile` to run the subagent under a different named profile, or `model` to override the active profile's model. Each subagent is its own session with its own provider/model, so overridden subagents fan out in parallel.]]
 
 M_tool.param = {
   type = "table",
@@ -116,12 +144,26 @@ M_tool.param = {
       type = "boolean",
       optional = true,
     },
+    {
+      name = "profile",
+      description = "Optional profile name to run the subagent under (its own session, so it runs in parallel).",
+      type = "string",
+      optional = true,
+    },
+    {
+      name = "model",
+      description = "Optional model override for the active profile (per-session, so it runs in parallel).",
+      type = "string",
+      optional = true,
+    },
   },
   required = { "prompt" },
   usage = {
     prompt = "The task for the subagent to perform",
     tools = "Optional allowlist of tool names",
     worktree = "Whether to run in an isolated git worktree",
+    profile = "Optional profile name to run the subagent under",
+    model = "Optional model override for the active profile",
   },
 }
 
@@ -139,13 +181,12 @@ M_tool.returns = {
   },
 }
 
----@type AvanteLLMToolFunc<{ prompt: string, tools?: string[], worktree?: boolean }>
+---@type AgentToolFunc<{ prompt: string, tools?: string[], worktree?: boolean, profile?: string, model?: string }>
 function M_tool.func(input, opts)
   local on_log = opts.on_log
   local on_complete = opts.on_complete
   local session_ctx = opts.session_ctx
 
-  local Llm = require("avante.llm")
   if not on_complete then
     return false, "on_complete not provided"
   end
@@ -158,6 +199,36 @@ function M_tool.func(input, opts)
   local tools = resolve_tools(input.tools)
   if #tools == 0 then
     return false, "no tools available for subagent"
+  end
+
+  -- Per-session provider/model: a run_agent profile/model override becomes the
+  -- subagent session's own provider/model (not a global switch), so overridden
+  -- subagents fan out in parallel.
+  local Runner = require("agent_core.runner")
+  local session_opts = {}
+  if input.profile or input.model then
+    local p, perr = resolve_override_profile(input)
+    if not p then
+      return false, perr
+    end
+    session_opts = {
+      provider = p.provider,
+      model = p.model,
+      api_key = Runner.resolve_key(p),
+      endpoint = p.endpoint,
+      api_key_name = p.api_key_name,
+    }
+  else
+    local p = Runner.resolve_profile(nil)
+    if p then
+      session_opts = {
+        provider = p.provider,
+        model = p.model,
+        api_key = Runner.resolve_key(p),
+        endpoint = p.endpoint,
+        api_key_name = p.api_key_name,
+      }
+    end
   end
 
   -- Optional worktree isolation. Chdir is global, so worktrees run sequentially
@@ -203,7 +274,8 @@ make reasonable assumptions and note them. When finished, call the
   local history_messages = {}
   local result = ""
 
-  local agent_loop_options = {
+  local Session = require("agent_core.runtime.session")
+  Session.new(session_opts):run({
     system_prompt = system_prompt,
     user_input = "start",
     tools = tools,
@@ -228,10 +300,8 @@ make reasonable assumptions and note them. When finished, call the
         opts.set_store("messages", history_messages)
       end
       for _, msg in ipairs(msgs) do
-        local History = require("avante.history")
-        local tool_use = History.Helpers.get_tool_use_data(msg)
-        if tool_use and tool_use.name == "attempt_completion" and tool_use.input and tool_use.input.result then
-          result = tool_use.input.result
+        if msg.role == "tool" and msg.name == "attempt_completion" then
+          result = msg.content
         end
       end
     end,
@@ -259,46 +329,27 @@ make reasonable assumptions and note them. When finished, call the
       end
       on_complete(result, nil)
     end,
-  }
-
-  Llm.agent_loop(agent_loop_options)
+  })
 end
 
---- Minimal sidebar rendering for a subagent run (mirrors dispatch_agent).
+--- Plain-text render of a subagent run (the owned Agents Window renders tool
+--- results as text, so no UI-line / highlight rendering dependency remains).
 function M_tool.on_render(input, opts)
-  local result_message = opts.result_message
-  local Line = require("avante.ui.line")
-  local Highlights = require("avante.highlights")
-
-  local state = "running"
-  local hl = Highlights.AVANTE_TASK_RUNNING
-  if result_message then
-    local History = require("avante.history")
-    local result = History.Helpers.get_tool_result_data(result_message)
-    if result then
-      if result.is_error then
-        state = "failed"
-        hl = Highlights.AVANTE_TASK_FAILED
-      else
-        state = "completed"
-        hl = Highlights.AVANTE_TASK_COMPLETED
-      end
-    end
-  end
-
-  local lines = {}
-  table.insert(lines, Line:new({ { "Subtask " .. state, hl } }))
-  table.insert(lines, Line:new({ { "" } }))
-  table.insert(lines, Line:new({ { "  Task:" } }))
+  local state = opts and opts.result_message and "completed" or "running"
+  local lines = { "Subtask " .. state, "", "  Task:" }
   for _, l in ipairs(vim.split(input.prompt or "", "\n")) do
-    table.insert(lines, Line:new({ { "    " .. l } }))
+    lines[#lines + 1] = "    " .. l
   end
   return lines
 end
 
---- Return the run_agent custom tool for wiring into avante's `custom_tools`.
+--- Return the run_agent custom tool for wiring into the owned runtime's tool registry.
 function M.run_agent_tool()
   return M_tool
 end
+
+--- Exposed for tests: resolve a run_agent `profile`/`model` override.
+--- Returns (profile, nil), (nil, nil) when no override, or (nil, err).
+M.resolve_override_profile = resolve_override_profile
 
 return M
