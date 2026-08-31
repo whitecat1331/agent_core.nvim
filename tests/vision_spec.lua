@@ -61,4 +61,33 @@ h.describe("vision", function()
     end)
     h.matches("not readable", err)
   end)
+
+  h.it("paste_allowed accepts vision models and rejects text-only models", function()
+    h.equals(true, Image.paste_allowed("gpt-4o"))
+    h.equals(true, Image.paste_allowed("llava:13b"))
+    h.equals(false, Image.paste_allowed("deepseek-chat"))
+    h.equals(false, Image.paste_allowed("qwen2.5-coder:7b-instruct"))
+    h.equals(false, Image.paste_allowed(""))
+    h.equals(false, Image.paste_allowed(nil))
+  end)
+
+  h.it("guard_paste blocks a non-vision model in block mode", function()
+    h.equals(false, Image.guard_paste("deepseek-chat", "block"))
+  end)
+
+  h.it("guard_paste warns but allows a non-vision model in warn mode", function()
+    h.equals(true, Image.guard_paste("deepseek-chat", "warn"))
+  end)
+
+  h.it("guard_paste allows vision models", function()
+    h.equals(true, Image.guard_paste("gpt-4o", "block"))
+  end)
+
+  h.it("guard_paste is disabled when mode is false", function()
+    h.equals(true, Image.guard_paste("deepseek-chat", false))
+  end)
+
+  h.it("guard_paste allows in auto_switch mode (caller performs the switch)", function()
+    h.equals(true, Image.guard_paste("deepseek-chat", "auto_switch"))
+  end)
 end)

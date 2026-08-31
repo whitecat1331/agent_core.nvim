@@ -1,11 +1,10 @@
 ---@mod agent_core.image Image generation tool (best-effort, configurable provider)
 ---@brief [[
---- Exposes a `generate_image` avante custom tool that calls a configurable
+--- Exposes a `generate_image` custom tool that calls a configurable
 --- OpenAI-compatible images endpoint via curl, returning the generated image
 --- URL(s). Configure `config.image = { endpoint, model, api_key_name }` (defaults
---- to OpenAI's DALL-E 3). Image *input* (vision) depends on avante's attachment
---- support and is not something agent_core can add unilaterally; this module
---- only covers generation.
+--- to OpenAI's DALL-E 3). Image *input* (vision) flows through the owned
+--- clipboard bridge; this module only covers generation.
 ---@brief ]]
 
 local M = {}
@@ -18,6 +17,7 @@ M.config = {
   vision_profile = nil, -- profile to use for image understanding; nil = auto
   vision_model = nil, -- override model for vision calls; nil = profile's model
   max_image_bytes = 10 * 1024 * 1024, -- refuse to encode images larger than this
+  paste_guard = "block", -- vision paste policy: "block" | "warn" | "auto_switch" | false
 }
 
 local TIMEOUT_MS = 60000
@@ -127,6 +127,73 @@ function M.resolve_vision_profile()
   return nil
 end
 
+--- Resolve the active chat model name ("" when unknown). Best-effort so the
+--- paste guard degrades to a warn rather than crashing when no profile is set.
+---@return string
+function M.active_model()
+  local Profiles = require("agent_core.profiles")
+  local name = Profiles.get_active()
+  if name then
+    local p = Profiles.find(name)
+    if p then
+      return Profiles.effective_model(p) or ""
+    end
+  end
+  return ""
+end
+
+--- Whether the given model can accept images (vision-capable). Pure helper that
+--- wraps registry.is_vision in a pcall so the guard never throws when the
+--- registry is unavailable.
+---@param model string|nil
+---@return boolean
+function M.paste_allowed(model)
+  local ok, Registry = pcall(require, "agent_core.registry")
+  if not ok or type(Registry) ~= "table" or not Registry.is_vision then
+    return false
+  end
+  return Registry.is_vision(model) == true
+end
+
+--- Decide whether an interactive image paste may proceed for the given model.
+--- Returns true (allow) or false (block). Emits a vim.notify for the block and
+--- warn modes; "auto_switch" is handled by the caller so this stays
+--- side-effect-free and unit-testable.
+---@param model string|nil
+---@param mode string|false|nil
+---@return boolean allow
+function M.guard_paste(model, mode)
+  mode = mode == nil and M.config.paste_guard or mode
+  if mode == false then
+    return true
+  end
+  if M.paste_allowed(model) then
+    return true
+  end
+  if mode == "auto_switch" then
+    return true
+  end
+  if mode == "warn" then
+    vim.notify(
+      "The active model ("
+        .. tostring(model or "unknown")
+        .. ") cannot see images. "
+        .. "The paste will be sent anyway and may be rejected by the API. Switch to a vision "
+        .. "model (e.g. Gemini or Claude) to see images.",
+      vim.log.levels.WARN
+    )
+    return true
+  end
+  vim.notify(
+    "Image paste blocked: the active model ("
+      .. tostring(model or "unknown")
+      .. ") cannot see images. "
+      .. 'Switch to a vision-capable profile (e.g. Gemini or Claude) or set config.image.paste_guard = "warn".',
+    vim.log.levels.ERROR
+  )
+  return false
+end
+
 --- Read + describe an image (or answer a question about it) via a vision model.
 --- Returns (description, err) through the callback.
 ---@param path string
@@ -203,7 +270,7 @@ local function post_json(url, headers, payload, cb)
   end)
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local generate_image = {
   name = "generate_image",
   description = "Generate an image from a text prompt via a configurable OpenAI-compatible images endpoint. "
@@ -251,7 +318,7 @@ local generate_image = {
   },
 }
 
----@type AvanteLLMToolFunc<{ prompt: string, size?: string, n?: integer }>
+---@type AgentToolFunc<{ prompt: string, size?: string, n?: integer }>
 function generate_image.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
@@ -305,12 +372,12 @@ function generate_image.func(input, opts)
   end)
 end
 
---- Return the generate_image custom tool for wiring into avante's `custom_tools`.
+--- Return the generate_image custom tool for wiring into the owned runtime's tool registry.
 function M.generate_image_tool()
   return generate_image
 end
 
----@type AvanteLLMTool
+---@type AgentTool
 local read_image = {
   name = "read_image",
   description = "Read an image file (screenshot, diagram, photo, or UI mock) and describe it, "
@@ -352,7 +419,7 @@ local read_image = {
   },
 }
 
----@type AvanteLLMToolFunc<{ path: string, question?: string }>
+---@type AgentToolFunc<{ path: string, question?: string }>
 function read_image.func(input, opts)
   if not opts.on_complete then
     return nil, "on_complete not provided"
