@@ -31,6 +31,9 @@ function M.pick_profile(cb)
           cb(item.profile)
         end
       end,
+      cancel = function()
+        cb(nil)
+      end,
     })
     return
   end
@@ -70,6 +73,7 @@ function M.pick_mode(cb)
       title = "Agent Mode",
       items = items,
       layout = { preview = false },
+      live = true,
       format = function(item)
         return { { item.text } }
       end,
@@ -78,6 +82,9 @@ function M.pick_mode(cb)
         if item and item.mode then
           cb(item.mode)
         end
+      end,
+      cancel = function()
+        cb(nil)
       end,
     })
     return
@@ -95,6 +102,58 @@ function M.pick_mode(cb)
     if m then
       cb(m)
     end
+  end)
+end
+
+--- Open a picker to choose a chat model from the pooled registry (every eligible
+--- primary/classifier entry across all providers), then invoke `cb(entry)`.
+function M.pick_model(cb)
+  local Registry = require("agent_core.registry")
+  local models = Registry.eligible_models()
+
+  local items = {}
+  for _, e in ipairs(models) do
+    table.insert(items, {
+      text = string.format("%s  |  %s  |  %s", e.model or "?", e.provider or "?", e.quality_tier or "?"),
+      entry = e,
+    })
+  end
+
+  local ok, Snacks = pcall(require, "snacks.picker")
+  if ok and type(Snacks) == "table" and type(Snacks.pick) == "function" then
+    Snacks.pick({
+      title = "Agent Model",
+      items = items,
+      layout = { preview = false },
+      live = true,
+      format = function(item)
+        return { { item.text } }
+      end,
+      confirm = function(picker, item)
+        picker:close()
+        if item and item.entry then
+          cb(item.entry)
+        end
+      end,
+      cancel = function()
+        cb(nil)
+      end,
+    })
+    return
+  end
+
+  local choices = {}
+  for _, it in ipairs(items) do
+    table.insert(choices, it.text)
+  end
+  vim.ui.select(choices, { prompt = "Agent model" }, function(choice)
+    for _, it in ipairs(items) do
+      if it.text == choice then
+        cb(it.entry)
+        return
+      end
+    end
+    cb(nil)
   end)
 end
 
