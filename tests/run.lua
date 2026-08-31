@@ -58,5 +58,6 @@ require("tests.session_edits_spec")
 require("tests.plan_spec")
 require("tests.manager_spec")
 require("tests.cheatsheet_spec")
+require("tests.reset_spec")
 
 require("tests.harness").run()
