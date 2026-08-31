@@ -25,6 +25,74 @@ M.KNOBS = {
   caution = { "act_first", "ask_first" },
 }
 
+--- Selectable model_policy axes (the iron triangle). "balanced" is not an axis;
+--- it is the collapsed form of selecting all three (or no strong preference).
+M.AXES = { "good", "fast", "cheap" }
+
+--- Normalize a model_policy value to its canonical form: the scalar "balanced",
+--- a single axis scalar, or a sorted 2-axis list. Returns nil for an empty or
+--- invalid selection (callers decide whether to fall back or reject).
+---@param v string|string[]|nil
+---@return string|string[]|nil
+function M.normalize_model_policy(v)
+  if v == "balanced" then
+    return "balanced"
+  end
+  if type(v) == "string" then
+    if vim.tbl_contains(M.AXES, v) then
+      return v
+    end
+    return nil
+  end
+  if type(v) ~= "table" then
+    return nil
+  end
+  local seen = {}
+  for _, a in ipairs(v) do
+    if type(a) == "string" and vim.tbl_contains(M.AXES, a) then
+      seen[a] = true
+    end
+  end
+  local axes = vim.tbl_keys(seen)
+  table.sort(axes)
+  if #axes == 0 then
+    return nil
+  elseif #axes == 3 then
+    return "balanced"
+  elseif #axes == 1 then
+    return axes[1]
+  end
+  return axes
+end
+
+--- Whether a model_policy value (scalar or list) contains the named axis.
+--- Returns false for the "balanced" scalar.
+---@param mp string|string[]|nil
+---@param name string
+---@return boolean
+function M.contains_axis(mp, name)
+  if type(mp) == "table" then
+    for _, a in ipairs(mp) do
+      if a == name then
+        return true
+      end
+    end
+    return false
+  end
+  return mp == name
+end
+
+--- Human-readable model_policy: a list renders as "good+fast", otherwise the
+--- scalar as-is.
+---@param mp string|string[]|nil
+---@return string
+function M.format_model_policy(mp)
+  if type(mp) == "table" then
+    return table.concat(mp, "+")
+  end
+  return mp or "balanced"
+end
+
 --- Named compositions of the three knobs (name -> knob values).
 M.ALIASES = {
   privacy = { model_policy = "balanced", trust_scope = "private", caution = "act_first" },
@@ -147,8 +215,10 @@ local POLICY_DEFS = {
     end,
   },
   cheap = {
-    hard = function()
-      return true
+    hard = function(e)
+      -- Cost ceiling: reject the "expensive" tier (and any numeric per-1M cost
+      -- above the metered tier) so a model can be "too expensive to use".
+      return cost_of(e) <= 4
     end,
     score = function(e)
       local c = cost_of(e)
@@ -171,6 +241,34 @@ local POLICY_DEFS = {
     end,
   },
 }
+
+--- A combined policy def for a 2-axis selection: intersect the hard filters and
+--- sum the scores. Reuses the individual POLICY_DEFS entries verbatim.
+---@param axes string[]
+---@return table
+local function combined_def(axes)
+  local defs = {}
+  for _, a in ipairs(axes) do
+    defs[#defs + 1] = POLICY_DEFS[a]
+  end
+  return {
+    hard = function(e)
+      for _, d in ipairs(defs) do
+        if not d.hard(e) then
+          return false
+        end
+      end
+      return true
+    end,
+    score = function(e)
+      local s = 0
+      for _, d in ipairs(defs) do
+        s = s + d.score(e)
+      end
+      return s
+    end,
+  }
+end
 
 --- Extra tools treated as destructive under ask_first (expands the base list).
 local EXTRA_DESTRUCTIVE_ASK_FIRST = {
@@ -247,11 +345,17 @@ function M.set_knob(knob, value)
   if not valid then
     return nil, "unknown knob: " .. tostring(knob)
   end
-  if not vim.tbl_contains(valid, value) then
+  local stored = value
+  if knob == "model_policy" then
+    stored = M.normalize_model_policy(value)
+    if not stored then
+      return nil, "select at least one axis: good, fast, cheap"
+    end
+  elseif not vim.tbl_contains(valid, value) then
     return nil, "invalid value '" .. tostring(value) .. "' for " .. knob
   end
   local data = read_persisted()
-  data[knob] = value
+  data[knob] = stored
   if not write_persisted(data) then
     return nil, "could not write policy store"
   end
@@ -264,8 +368,15 @@ end
 function M.set(knobs)
   local data = read_persisted()
   for knob, value in pairs(knobs or {}) do
-    if M.KNOBS[knob] and vim.tbl_contains(M.KNOBS[knob], value) then
-      data[knob] = value
+    if M.KNOBS[knob] then
+      if knob == "model_policy" then
+        local normalized = M.normalize_model_policy(value)
+        if normalized then
+          data[knob] = normalized
+        end
+      elseif vim.tbl_contains(M.KNOBS[knob], value) then
+        data[knob] = value
+      end
     end
   end
   write_persisted(data)
@@ -291,7 +402,8 @@ local function classifier_allowed(knobs)
   if knobs.trust_scope ~= "any" then
     return false
   end
-  if knobs.model_policy == "cheap" then
+  local mp = M.normalize_model_policy(knobs.model_policy) or "balanced"
+  if M.contains_axis(mp, "cheap") then
     return false
   end
   return true
@@ -308,7 +420,8 @@ local function mode_bonus(knobs, mode_name)
       bonus = bonus + 1
     end
   end
-  if knobs.model_policy == "good" then
+  local mp = M.normalize_model_policy(knobs.model_policy) or "balanced"
+  if M.contains_axis(mp, "good") then
     if mode_name == "plan" then
       bonus = bonus + 0.5
     end
@@ -322,15 +435,24 @@ end
 function M.apply(knobs)
   knobs = knobs or M.get_active()
   local allowed = TRUST_SCOPES[knobs.trust_scope] or TRUST_SCOPES.any
-  local def = POLICY_DEFS[knobs.model_policy] or POLICY_DEFS.balanced
+  local mp = M.normalize_model_policy(knobs.model_policy)
+  if not mp then
+    mp = "balanced"
+  end
+  local def
+  if type(mp) == "table" then
+    def = combined_def(mp)
+  else
+    def = POLICY_DEFS[mp] or POLICY_DEFS.balanced
+  end
   return {
-    model_policy = knobs.model_policy,
+    model_policy = mp,
     trust_scope = knobs.trust_scope,
     caution = knobs.caution,
     allowed_trusts = allowed,
     classifier_allowed = classifier_allowed(knobs),
     expand_destructive = knobs.caution == "ask_first",
-    trim_loops = knobs.model_policy == "cheap",
+    trim_loops = M.contains_axis(mp, "cheap"),
     --- Score a registry entry. Returns -math.huge for filtered-out entries.
     score = function(entry)
       if not vim.tbl_contains(allowed, entry.trust) then
@@ -367,6 +489,26 @@ function M.rank(role)
   return entries
 end
 
+--- Best catalog model for a provider under the active policy (deterministic).
+--- Returns a registry entry (with .model/.provider) or nil when none passes the
+--- trust/hard filters.
+---@param provider string
+---@return table|nil
+function M.best_model(provider)
+  local Registry = require("agent_core.registry")
+  local pol = M.apply()
+  local best, best_score
+  for _, e in ipairs(Registry.list()) do
+    if e.provider == provider then
+      local s = pol.score(e)
+      if s > -1e15 and (not best or s > best_score) then
+        best, best_score = e, s
+      end
+    end
+  end
+  return best
+end
+
 --- Effective destructive-tools list: the base config list, expanded by ask_first.
 ---@return string[]
 function M.effective_destructive_tools()
@@ -394,7 +536,63 @@ end
 ---@return string
 function M.describe()
   local s = M.get_active()
-  return string.format("%s / %s / %s", s.model_policy, s.trust_scope, s.caution)
+  return string.format("%s / %s / %s", M.format_model_policy(s.model_policy), s.trust_scope, s.caution)
+end
+
+--- Apply a full 3-knob selection (the guided wizard's write). Pure: no UI, so it
+--- is headless-testable. Missing knobs keep their current value.
+---@param model_policy string|string[]|nil
+---@param trust_scope string|nil
+---@param caution string|nil
+---@return table state
+function M.guided_apply(model_policy, trust_scope, caution)
+  return M.set({
+    model_policy = model_policy,
+    trust_scope = trust_scope,
+    caution = caution,
+  })
+end
+
+--- Guided 3-knob selector: model_policy -> trust_scope -> caution, each via
+--- vim.ui.select, defaulting to the current value on cancel, then guided_apply.
+---@param cb fun()|nil
+function M.guided(cb)
+  cb = cb or function() end
+  local current = M.get_active()
+
+  local mp_labels = { "balanced", "good", "fast", "cheap", "good+fast", "good+cheap", "fast+cheap" }
+
+  --- Map a picker label ("good+fast") back to the canonical scalar/list form.
+  local function parse_mp(label)
+    if label == "balanced" then
+      return "balanced"
+    end
+    local axes = {}
+    for axis in label:gmatch("[^+]+") do
+      axes[#axes + 1] = axis
+    end
+    if #axes == 1 then
+      return axes[1]
+    end
+    return axes
+  end
+
+  local function step_caution(mp_label, scope)
+    vim.ui.select(M.KNOBS.caution, { prompt = "Model policy: caution" }, function(caution)
+      M.guided_apply(parse_mp(mp_label), scope, caution or current.caution)
+      cb()
+    end)
+  end
+
+  local function step_trust_scope(mp_label)
+    vim.ui.select(M.KNOBS.trust_scope, { prompt = "Model policy: trust scope" }, function(scope)
+      step_caution(mp_label, scope or current.trust_scope)
+    end)
+  end
+
+  vim.ui.select(mp_labels, { prompt = "Model policy: quality / cost / speed" }, function(mp)
+    step_trust_scope(mp or M.format_model_policy(current.model_policy))
+  end)
 end
 
 function M.setup()
@@ -433,10 +631,17 @@ function M.policy_cmd(arg)
   for _, a in ipairs(aliases) do
     options[#options + 1] = a
   end
+  table.insert(options, "(guided setup)")
   table.insert(options, "(show current)")
   vim.ui.select(options, { prompt = "Agent policy (alias): " }, function(choice)
     if not choice or choice == "(show current)" then
       vim.notify("Agent policy: " .. M.describe(), vim.log.levels.INFO)
+      return
+    end
+    if choice == "(guided setup)" then
+      M.guided(function()
+        vim.notify("Agent policy: " .. M.describe(), vim.log.levels.INFO)
+      end)
       return
     end
     local ok, err = M.alias(choice)
