@@ -97,7 +97,7 @@ h.describe("rules", function()
     vim.fn.delete(dir, "rf")
   end)
 
-  h.it("read_rule_tool exposes the read_rule avante tool", function()
+  h.it("read_rule_tool exposes the read_rule tool", function()
     local tool = Rules.read_rule_tool()
     h.equals("read_rule", tool.name)
     h.equals("function", type(tool.func))

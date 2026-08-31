@@ -24,7 +24,7 @@ h.describe("browser", function()
     h.equals("npx playwright", c[1])
   end)
 
-  h.it("exposes the three avante tools", function()
+  h.it("exposes the three browser tools", function()
     h.equals("browser_open", Browser.browser_open_tool().name)
     h.equals("browser_screenshot", Browser.browser_screenshot_tool().name)
     h.equals("browser_snapshot", Browser.browser_snapshot_tool().name)

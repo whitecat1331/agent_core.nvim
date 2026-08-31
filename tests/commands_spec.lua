@@ -164,7 +164,7 @@ h.describe("commands", function()
     end)
   end)
 
-  h.it("run_command_tool exposes the run_command avante tool", function()
+  h.it("run_command_tool exposes the run_command tool", function()
     local tool = Commands.run_command_tool()
     h.equals("run_command", tool.name)
     h.equals("function", type(tool.func))
