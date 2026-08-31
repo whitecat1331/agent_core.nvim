@@ -56,9 +56,16 @@ function M.ollama_endpoint()
   return os.getenv("OLLAMA_HOST") or "http://127.0.0.1:11434"
 end
 
---- Full set of Ollama endpoints: the default/local endpoint plus any declared
---- remote endpoints (config.registry.ollama_endpoints). Deduplicated, loopback
---- always first.
+--- Extra (remote) Ollama endpoints persisted in setup.json — the exact state the
+--- wizard and :AgentEndpointAdd/:AgentEndpointRemove manage.
+---@return string[]
+function M.extra_ollama_endpoints()
+  local state = M.load_setup_state()
+  return state.ollama_endpoints or {}
+end
+
+--- Full set of Ollama endpoints: the default/local endpoint, config-declared
+--- remotes, plus persisted setup.json endpoints. Deduplicated, loopback first.
 ---@return string[]
 function M.ollama_endpoints()
   local cfg = require("agent_core").config
@@ -77,7 +84,53 @@ function M.ollama_endpoints()
       push(url)
     end
   end
+  for _, url in ipairs(M.extra_ollama_endpoints()) do
+    push(url)
+  end
   return list
+end
+
+--- Persist a remote Ollama endpoint into setup.json (deduped). Pure (no probing);
+--- the endpoint is picked up by ollama_endpoints() on the next refresh.
+---@param url string
+---@return boolean ok
+---@return string|nil err
+function M.add_ollama_endpoint(url)
+  if not url or url == "" then
+    return false, "endpoint URL required"
+  end
+  local state = M.load_setup_state()
+  state.ollama_endpoints = state.ollama_endpoints or {}
+  for _, u in ipairs(state.ollama_endpoints) do
+    if u == url then
+      return false, "endpoint already present"
+    end
+  end
+  state.ollama_endpoints[#state.ollama_endpoints + 1] = url
+  if not M.save_setup_state(state) then
+    return false, "could not write setup state"
+  end
+  return true, nil
+end
+
+--- Remove a persisted remote Ollama endpoint from setup.json.
+---@param url string
+---@return boolean ok
+---@return string|nil err
+function M.remove_ollama_endpoint(url)
+  local state = M.load_setup_state()
+  local list = state.ollama_endpoints or {}
+  local out = {}
+  for _, u in ipairs(list) do
+    if u ~= url then
+      out[#out + 1] = u
+    end
+  end
+  state.ollama_endpoints = out
+  if not M.save_setup_state(state) then
+    return false, "could not write setup state"
+  end
+  return true, nil
 end
 
 --- True when an Ollama endpoint host is loopback (local Ollama).
@@ -214,6 +267,64 @@ function M.entry_enabled(entry, state)
     return false
   end
   return true
+end
+
+--- Persist an enabled/disabled override for a named entry into setup.json.
+---@param name string
+---@param enabled boolean
+---@return boolean ok
+---@return string|nil err
+function M.set_enabled(name, enabled)
+  if not name or name == "" then
+    return false, "entry name required"
+  end
+  local state = M.load_setup_state()
+  state.enabled = state.enabled or {}
+  state.enabled[name] = enabled == true
+  if not M.save_setup_state(state) then
+    return false, "could not write setup state"
+  end
+  return true, nil
+end
+
+--- Every eligible chat model: primary/classifier role AND enabled (key present
+--- for cloud providers, always for Ollama). This is the :AgentModel dropdown
+--- pool, sourced from the same merge M.list() already computes.
+---@return table[]
+function M.eligible_models()
+  local out = {}
+  for _, e in ipairs(M.list()) do
+    local roles = e.roles or {}
+    if (vim.tbl_contains(roles, "primary") or vim.tbl_contains(roles, "classifier")) and e.enabled then
+      out[#out + 1] = e
+    end
+  end
+  return out
+end
+
+--- The persisted active-model override: { provider, model } or nil.
+---@return table|nil
+function M.active_model()
+  local state = M.load_setup_state()
+  local am = state.active_model
+  if type(am) == "table" and am.provider and am.model and am.model ~= "" then
+    return am
+  end
+  return nil
+end
+
+--- Set (or clear, when model is nil) the active-model override in setup.json.
+---@param provider string
+---@param model string|nil
+---@return boolean ok
+function M.set_active_model(provider, model)
+  local state = M.load_setup_state()
+  if not model then
+    state.active_model = nil
+  else
+    state.active_model = { provider = provider, model = model }
+  end
+  return M.save_setup_state(state)
 end
 
 --- Infer whether a model name is FIM-trained.
@@ -407,6 +518,7 @@ local function chat_entries()
       quality_tier = p.quality_tier or (is_local and "medium" or "high"),
       provider = p.provider,
       model = p.model,
+      endpoint = p.endpoint,
       api_key_name = p.api_key_name,
       description = p.description,
       autoswitch = p.autoswitch,
@@ -736,6 +848,116 @@ function M.add_cmd(arg)
   else
     vim.notify("AgentRegistryAdd: " .. tostring(err), vim.log.levels.ERROR)
   end
+end
+
+--- Resolve a profile name (arg or picker) and mutate its persisted enabled flag.
+---@param arg string|nil
+---@param enabled boolean
+local function set_enabled_cmd(arg, enabled)
+  local Profiles = require("agent_core.profiles")
+  local Pickers = require("agent_core.pickers")
+  local function apply(p)
+    local ok, err = M.set_enabled(p.name, enabled)
+    if ok then
+      vim.notify(
+        string.format("Agent profile %s: %s", p.name, enabled and "enabled" or "disabled"),
+        vim.log.levels.INFO
+      )
+    else
+      vim.notify("Agent profile: " .. tostring(err), vim.log.levels.ERROR)
+    end
+  end
+  if arg and arg ~= "" then
+    local p = Profiles.find(arg)
+    if not p then
+      vim.notify("Profile not found: " .. arg, vim.log.levels.WARN)
+      return
+    end
+    apply(p)
+    return
+  end
+  Pickers.pick_profile(function(p)
+    if p then
+      apply(p)
+    end
+  end)
+end
+
+--- Enable a chat profile via a persisted setup.json override (:AgentProfileEnable).
+---@param arg string|nil
+function M.enable_cmd(arg)
+  set_enabled_cmd(arg, true)
+end
+
+--- Disable a chat profile via a persisted setup.json override (:AgentProfileDisable).
+---@param arg string|nil
+function M.disable_cmd(arg)
+  set_enabled_cmd(arg, false)
+end
+
+--- List every configured Ollama endpoint in a scratch buffer (:AgentEndpointList).
+function M.endpoint_list_cmd()
+  local eps = M.ollama_endpoints()
+  local lines = { "# Ollama endpoints", "", string.format("%d endpoint(s)", #eps), "" }
+  for i, url in ipairs(eps) do
+    lines[#lines + 1] = string.format("%d. %s", i, url)
+  end
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  vim.bo[buf].filetype = "markdown"
+  vim.bo[buf].modifiable = false
+  vim.api.nvim_open_win(buf, true, { split = "right" })
+end
+
+--- Add a remote Ollama endpoint (:AgentEndpointAdd [url]). Prompts when no url.
+---@param arg string|nil
+function M.endpoint_add_cmd(arg)
+  local function add(url)
+    local ok, err = M.add_ollama_endpoint(url)
+    if ok then
+      vim.notify("Added Ollama endpoint: " .. url, vim.log.levels.INFO)
+      M.refresh_ollama()
+    else
+      vim.notify("AgentEndpointAdd: " .. tostring(err), vim.log.levels.ERROR)
+    end
+  end
+  if arg and arg ~= "" then
+    add(arg)
+    return
+  end
+  vim.ui.input({ prompt = "Ollama endpoint URL: " }, function(input)
+    if input and input ~= "" then
+      add(input)
+    end
+  end)
+end
+
+--- Remove a remote Ollama endpoint (:AgentEndpointRemove [url]). Picks when no url.
+---@param arg string|nil
+function M.endpoint_remove_cmd(arg)
+  local function remove(url)
+    local ok, err = M.remove_ollama_endpoint(url)
+    if ok then
+      vim.notify("Removed Ollama endpoint: " .. url, vim.log.levels.INFO)
+      M.refresh_ollama()
+    else
+      vim.notify("AgentEndpointRemove: " .. tostring(err), vim.log.levels.ERROR)
+    end
+  end
+  if arg and arg ~= "" then
+    remove(arg)
+    return
+  end
+  local eps = M.extra_ollama_endpoints()
+  if #eps == 0 then
+    vim.notify("No extra Ollama endpoints to remove", vim.log.levels.INFO)
+    return
+  end
+  vim.ui.select(eps, { prompt = "Remove Ollama endpoint: " }, function(choice)
+    if choice then
+      remove(choice)
+    end
+  end)
 end
 
 return M

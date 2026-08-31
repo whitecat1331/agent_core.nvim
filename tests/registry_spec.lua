@@ -152,6 +152,7 @@ h.describe("registry", function()
   h.it("ollama_endpoints includes loopback plus declared remotes (deduplicated)", function()
     local saved = vim.deepcopy(core.config.registry)
     core.config.registry = vim.tbl_deep_extend("force", {}, saved or {}, {
+      setup_path = vim.fn.tempname(),
       ollama_endpoint = "http://127.0.0.1:11434",
       ollama_endpoints = { "http://100.64.0.2:11434", "http://127.0.0.1:11434" },
     })
@@ -159,6 +160,48 @@ h.describe("registry", function()
     h.equals(2, #eps)
     h.equals("http://127.0.0.1:11434", eps[1])
     h.equals("http://100.64.0.2:11434", eps[2])
+    core.config.registry = saved
+  end)
+
+  h.it("set_enabled persists a setup.json override and entry_enabled reflects it", function()
+    local saved = vim.deepcopy(core.config.registry)
+    core.config.registry = { setup_path = vim.fn.tempname() }
+
+    local ok, err = Registry.set_enabled("Claude", false)
+    h.equals(true, ok, tostring(err))
+    local entry = { name = "Claude", provider = "claude", model = "x", api_key_name = "ANTHROPIC_API_KEY" }
+    h.equals(false, Registry.entry_enabled(entry), "disabled override wins over env key")
+
+    Registry.set_enabled("Claude", true)
+    h.equals(true, Registry.entry_enabled(entry), "enabled override applied")
+
+    core.config.registry = saved
+  end)
+
+  h.it("add/remove_ollama_endpoint persists and ollama_endpoints merges them", function()
+    local saved = vim.deepcopy(core.config.registry)
+    core.config.registry = {
+      setup_path = vim.fn.tempname(),
+      ollama_endpoint = "http://127.0.0.1:11434",
+    }
+
+    local ok, err = Registry.add_ollama_endpoint("http://100.64.0.2:11434")
+    h.equals(true, ok, tostring(err))
+
+    local eps = Registry.ollama_endpoints()
+    h.equals(2, #eps)
+    h.equals("http://127.0.0.1:11434", eps[1])
+    h.equals("http://100.64.0.2:11434", eps[2])
+
+    -- Duplicate add is rejected.
+    local ok2, err2 = Registry.add_ollama_endpoint("http://100.64.0.2:11434")
+    h.equals(false, ok2)
+    h.truthy(err2 ~= nil, "duplicate add errors")
+
+    local ok3 = Registry.remove_ollama_endpoint("http://100.64.0.2:11434")
+    h.equals(true, ok3)
+    h.equals(1, #Registry.ollama_endpoints())
+
     core.config.registry = saved
   end)
 
@@ -191,12 +234,70 @@ h.describe("registry", function()
     h.equals(false, claude.fim)
   end)
 
+  h.it("chat_entries preserves a custom profile's endpoint", function()
+    local saved = vim.deepcopy(core.config.profiles)
+    core.config.profiles = {
+      extra = {
+        {
+          name = "Remote Agent",
+          provider = "ollama",
+          model = "qwen2.5-coder:7b-instruct",
+          endpoint = "http://100.64.0.2:11434",
+          trust = "private-remote",
+          system_prompt = "remote",
+          autoswitch = true,
+        },
+      },
+    }
+    local e = Registry.find("Remote Agent")
+    h.truthy(e, "custom profile surfaces in registry")
+    h.equals("http://100.64.0.2:11434", e.endpoint)
+    h.equals("private-remote", e.trust)
+    core.config.profiles = saved
+  end)
+
   h.it("catalog-only chat models surface in the registry (primary role)", function()
     local names = {}
     for _, e in ipairs(Registry.for_role("primary")) do
       names[e.name] = true
     end
-    h.truthy(names["GPT-4o"], "GPT-4o surfaced from catalog")
+    h.truthy(names["OpenAI"], "GPT-4o is now the declared OpenAI profile")
     h.truthy(names["Claude Haiku"], "Claude Haiku surfaced from catalog")
+    h.truthy(names["DeepSeek Reasoner"], "DeepSeek Reasoner surfaced from catalog")
+  end)
+
+  h.it("eligible_models returns enabled primary/classifier entries", function()
+    local saved = vim.deepcopy(core.config.registry)
+    core.config.registry = { setup_path = vim.fn.tempname() }
+    local names = {}
+    for _, e in ipairs(Registry.eligible_models()) do
+      names[e.name] = true
+    end
+    h.truthy(names["DeepSeek (local)"], "local Ollama always eligible")
+    h.falsy(names["Claude"], "cloud profile without a key is not eligible")
+
+    Registry.set_enabled("Claude", true)
+    local names2 = {}
+    for _, e in ipairs(Registry.eligible_models()) do
+      names2[e.name] = true
+    end
+    h.truthy(names2["Claude"], "Claude eligible after enable override")
+    core.config.registry = saved
+  end)
+
+  h.it("active_model/set_active_model round-trips and clears", function()
+    local saved = vim.deepcopy(core.config.registry)
+    core.config.registry = { setup_path = vim.fn.tempname() }
+    h.equals(nil, Registry.active_model())
+    Registry.set_active_model("openai", "gpt-4o-mini")
+    local am = Registry.active_model()
+    h.equals("openai", am.provider)
+    h.equals("gpt-4o-mini", am.model)
+    Registry.set_active_model("openai", nil)
+    h.equals(nil, Registry.active_model())
+    Registry.set_active_model("openai", "gpt-4o-mini")
+    Registry.set_active_model(nil, nil)
+    h.equals(nil, Registry.active_model(), "set_active_model(nil, nil) also clears")
+    core.config.registry = saved
   end)
 end)
