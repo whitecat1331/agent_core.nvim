@@ -178,7 +178,7 @@ function M.warm_backend(backend)
   if bin == "curl" or bin == "" then
     return
   end
-  local payload = vim.fn.json_encode({
+  local payload = vim.json.encode({
     model = backend.model or M.config.fim_model,
     prompt = "",
     stream = false,
@@ -341,7 +341,7 @@ end
 ---@param cb fun(text:string|nil, err:string|nil)
 ---@param on_chunk fun(token:string)|nil
 function M.fim_on(backend, prefix, suffix, cb, on_chunk)
-  local payload = vim.fn.json_encode({
+  local payload = vim.json.encode({
     model = backend.model or M.config.fim_model,
     prompt = prefix,
     suffix = suffix,
@@ -476,27 +476,29 @@ end
 
 --- blink.cmp source adapter.
 ---@return table
---- The blink.cmp source object. Exposed both as `blink_source()` (for direct
---- wiring) and at the module top level (`get_completions` / `enabled`) so it can
---- also be used via `module = "agent_core.completion"`.
+--- The blink.cmp source object, exposed three ways:
+---   - `module = "agent_core.completion"` in blink's `providers` (the modern
+---     blink.cmp 1.x API: blink calls `require(...).new(opts, config)`),
+---   - `blink_source()` returning a ready source instance,
+---   - top-level `get_completions` / `enabled` for the legacy module API.
 local source = {
   name = "agent_core",
   kind = "completion",
   enabled = function()
     return M.config.enabled == true
   end,
-  get_completions = function(_, callback)
-    M.complete(function(text, err)
-      if err or not text or text == "" then
-        callback({ is_incomplete_forward = false, is_incomplete_backward = false, items = {} })
+  get_completions = function(_, _, on_items)
+    M.complete(function(text, cerr)
+      if cerr or not text or text == "" then
+        on_items({ is_incomplete_forward = false, is_incomplete_backward = false, items = {} })
         return
       end
       local label = text:gsub("\n+$", "")
       if label == "" then
-        callback({ is_incomplete_forward = false, is_incomplete_backward = false, items = {} })
+        on_items({ is_incomplete_forward = false, is_incomplete_backward = false, items = {} })
         return
       end
-      callback({
+      on_items({
         is_incomplete_forward = false,
         is_incomplete_backward = false,
         items = {
@@ -511,16 +513,24 @@ local source = {
   end,
 }
 
+-- blink.cmp 1.x source constructor. blink calls `require(module).new(opts, config)`
+-- and expects a `blink.cmp.Source` back; without this the module crashes with
+-- "attempt to call field 'new' (a nil value)".
+function source.new(opts, config)
+  return setmetatable({}, { __index = source })
+end
+
 --- blink.cmp source adapter.
 ---@return table
 function M.blink_source()
-  return source
+  return source.new()
 end
 
 -- Top-level source fields so `module = "agent_core.completion"` works in
--- blink.cmp's providers config.
+-- blink.cmp's providers config (legacy module API; the 1.x API uses `new`).
 M.get_completions = source.get_completions
 M.enabled = source.enabled
+M.new = source.new
 
 -- Ghost text: streaming FIM rendered as an inline virtual-text suggestion that
 -- can be accepted with a key, cleared on movement, or replaced by the next one.
@@ -735,6 +745,11 @@ end
 --- completion prompt when the provider is not Ollama).
 function M.ghost_text()
   if not M.config.enabled then
+    return
+  end
+  -- Ghost text is only meaningful in editable file buffers; never run the FIM
+  -- cycle (or render virtual text) inside picker/prompt/scratch buffers.
+  if vim.bo[vim.api.nvim_get_current_buf()].buftype ~= "" then
     return
   end
   local ghost_cfg = M.config.ghost_text or {}
@@ -1068,9 +1083,12 @@ function M.setup()
     group = group,
     callback = function()
       if timer then
-        vim.fn.timer_stop(timer)
+        pcall(timer.stop, timer)
+        pcall(timer.close, timer)
+        timer = nil
       end
       timer = vim.defer_fn(function()
+        timer = nil
         M.ghost_text()
       end, M.config.debounce_ms or 150)
     end,

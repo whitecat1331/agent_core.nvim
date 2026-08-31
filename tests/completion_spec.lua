@@ -16,10 +16,17 @@ h.describe("completion router", function()
 
   h.it("effective_max_tokens trims under cheap", function()
     local saved = vim.deepcopy(core.config.policy)
-    core.config.policy = { model_policy = "balanced", trust_scope = "any", caution = "act_first" }
+    core.config.policy = { path = vim.fn.tempname(), model_policy = "balanced", trust_scope = "any", caution = "act_first" }
     h.equals(Completion.config.max_tokens, Completion.effective_max_tokens())
 
-    core.config.policy = { model_policy = "cheap", trust_scope = "any", caution = "act_first" }
+    core.config.policy = { path = vim.fn.tempname(), model_policy = "cheap", trust_scope = "any", caution = "act_first" }
+    h.equals(math.floor(Completion.config.max_tokens / 2), Completion.effective_max_tokens())
+    core.config.policy = saved
+  end)
+
+  h.it("effective_max_tokens trims under a cheap combo", function()
+    local saved = vim.deepcopy(core.config.policy)
+    core.config.policy = { path = vim.fn.tempname(), model_policy = { "cheap", "fast" }, trust_scope = "any", caution = "act_first" }
     h.equals(math.floor(Completion.config.max_tokens / 2), Completion.effective_max_tokens())
     core.config.policy = saved
   end)
@@ -73,10 +80,17 @@ h.describe("completion router", function()
     h.truthy(names["local"], "local allowed under private")
     h.falsy(names["cloud"], "cloud excluded (non-fim)")
 
-    -- local scope: only local survives
+    -- local scope: only local-trust backends survive — the declared "local"
+    -- backend plus the "DeepSeek (local)" profile, which now carries the
+    -- completion role too (unified primary+completion+edit roles).
     local loc = Completion.candidates(Policy.apply({ trust_scope = "local" }))
-    h.equals(1, #loc)
-    h.equals("local", loc[1].name)
+    h.equals(2, #loc)
+    local locnames = {}
+    for _, e in ipairs(loc) do
+      locnames[e.name] = true
+    end
+    h.truthy(locnames["local"], "declared local backend survives")
+    h.truthy(locnames["DeepSeek (local)"], "local profile completion entry survives")
 
     core.config.completion = saved
   end)
