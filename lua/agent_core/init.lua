@@ -25,7 +25,10 @@ M.config = {
   brief_prompt_max_chars = 8000,
   -- Debounce (ms) for auto-refreshing the brief after buffer writes.
   refresh_debounce_ms = 5000,
-  -- Profiles; nil falls back to agent_core.profiles defaults.
+  -- Profiles. nil = defaults; a plain array = full replacement; or
+  -- `{ extra = { ... } }` to append custom agents on top of the defaults.
+  -- The JSON file `<data>/agent_core/profiles.json` (array, or
+  -- `{ profiles = [...] }`) is ALWAYS appended on top of either form.
   profiles = nil,
   -- Modes; nil falls back to agent_core.modes defaults.
   modes = nil,
@@ -67,7 +70,8 @@ M.config = {
     auto_attach_globs = true, -- inject glob-scoped rules only when they match the active file
   },
   -- Auto context attachment: open buffer window, visual selection, and LSP
-  -- diagnostics injected into the system prompt automatically.
+  -- diagnostics injected into the system prompt automatically. NOTE: this is
+  -- *attach* context, unrelated to `runtime.context` (conversation compaction).
   context = {
     enabled = true,
     max_lines = 200,
@@ -91,6 +95,12 @@ M.config = {
   plan = {
     dir = ".agent_core/plans", -- where create_plan writes Markdown plans
     build_switch_mode = true, -- :AgentPlanBuild switches to agent mode first
+    ideas_file = nil, -- nil = .agent_core/plan_ideas.json (project-scoped idea backlog)
+    remind = {
+      enabled = true, -- master switch (startup popup + persistent badge)
+      startup_popup = true, -- vim.notify once per session when items are outstanding
+      indicator = true, -- persistent, collapsible floating badge
+    },
   },
   -- Debug mode: instrumentation loop. Runtime evidence reaches the model via
   -- chat plus an optional log file/command (runtime-evidence channel).
@@ -109,6 +119,12 @@ M.config = {
   -- Agent mode: non-intrusive git patch checkpoints.
   checkpoint = {
     dir = nil, -- nil = <data>/agent_core/checkpoints
+  },
+  -- Per-session edit journal: keep = lock in a turn, discard = revert the
+  -- un-kept turns (Cursor-style per-turn Keep / Undo All).
+  session_edits = {
+    enabled = true,
+    dir = nil, -- nil = <data>/agent_core/session_edits
   },
   -- Tab autocomplete: FIM insert (blink.cmp source) + predictive edits.
   completion = {
@@ -137,7 +153,7 @@ M.config = {
   },
   -- Model-selection policy: three orthogonal knobs + aliases.
   policy = {
-    model_policy = "balanced", -- balanced | fast | good | cheap
+    model_policy = "balanced", -- balanced (= all three) | good | fast | cheap | {good,fast} (1-3 axes, min 1)
     trust_scope = "any", -- any | private | local
     caution = "act_first", -- act_first | ask_first
   },
@@ -151,7 +167,7 @@ M.config = {
   -- First-run setup wizard (:AgentSetup).
   setup = {
     auto_prompt = true, -- offer :AgentSetup on first load when unconfigured
-    bootstrap = true, -- run the optional AI suggestion after save
+    bootstrap = false, -- run the optional AI suggestion after save (opt-in)
     bootstrap_profile = nil, -- nil = first keyed cloud profile, else local Ollama
   },
   -- Reusable skills: SKILL.md procedures (project + user), injected as a
@@ -174,10 +190,11 @@ M.config = {
   ask = {
     enabled = true,
   },
-  -- Session history resume (lists/loads prior avante sessions).
+  -- Session history resume (lists/loads prior sessions via the owned runtime
+  -- history store; each record holds its own title + provider + model).
   history = {
     enabled = true,
-    dir = nil, -- nil = avante history dir (probed) or <data>/agent_core/history
+    dir = nil, -- nil = <data>/agent_core/history
   },
   -- Scheduled/recurring headless agents.
   automation = {
@@ -211,6 +228,7 @@ M.config = {
     vision_profile = nil, -- vision (image input) profile; nil = auto-detect
     vision_model = nil, -- override model for vision calls; nil = profile's model
     max_image_bytes = 10 * 1024 * 1024,
+    paste_guard = "block", -- guard interactive image pastes: "block" | "warn" | "auto_switch" | false
   },
   -- Shared diff UX (per-hunk accept/reject) for agent edits.
   diff = {
@@ -247,6 +265,12 @@ M.config = {
     "push",
     "bugbot",
   },
+  -- Owned-runtime knobs (session loop, Agents Window UI, clipboard, tool
+  -- toggles, context compaction, workflows). nil = agent_core.runtime.config
+  -- defaults. NOTE: this `runtime.context` is conversation *compaction*
+  -- (thresholds + cheaper summary model); the top-level `context` block above
+  -- is *auto context attach* (buffer/selection/diagnostics). Unrelated.
+  runtime = nil,
   -- Directories excluded from the brief's file tree.
   excluded_dirs = {
     ".git",
@@ -292,6 +316,9 @@ end
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", M.config, opts or {})
 
+  -- WSL: prefer clip.exe before Lazy/plugins touch the clipboard (avoids xclip + DISPLAY=:0).
+  local Platform = require("agent_core.platform")
+  Platform.ensure_wsl_clipboard()
   require("agent_core.indexer").setup()
   require("agent_core.workspace").setup()
   require("agent_core.mcp_index").setup()
@@ -316,6 +343,7 @@ function M.setup(opts)
   require("agent_core.debug").setup()
   require("agent_core.dap").setup()
   require("agent_core.checkpoint").setup()
+  require("agent_core.session_edits").setup(M.config.session_edits)
   require("agent_core.completion").setup()
   require("agent_core.bugbot").setup()
   require("agent_core.memory").setup()
@@ -324,16 +352,87 @@ function M.setup(opts)
   require("agent_core.image").setup()
   require("agent_core.diff").setup()
   require("agent_core.edits").setup()
+  require("agent_core.plan_manager").setup()
 
-  vim.api.nvim_create_user_command("AgentSwitch", function()
-    require("agent_core.pickers").pick_profile(function(profile)
-      require("agent_core.profiles").switch(profile)
+  -- Merge owned-runtime knobs (session/ui/clipboard/tools/context/workflows)
+  -- from the `runtime` config block into the runtime's schema.
+  require("agent_core.runtime").setup(M.config.runtime)
+
+  -- Persist open chat sessions on exit; restore + optional auto-open on startup.
+  vim.api.nvim_create_autocmd("VimLeavePre", {
+    group = vim.api.nvim_create_augroup("AgentCoreSessions", { clear = true }),
+    callback = function()
+      pcall(function()
+        require("agent_core.runtime").persist_open_sessions()
+      end)
+    end,
+  })
+  if #vim.api.nvim_list_uis() > 0 then
+    local startup_done = false
+    local function restore_on_startup()
+      if startup_done then
+        return
+      end
+      startup_done = true
+      local ok, err = pcall(function()
+        local rt = require("agent_core.runtime")
+        local ui_cfg = rt.config.ui or {}
+        local ide = require("agent_core.runtime.ui.ide")
+        if ide.is_open() then
+          return
+        end
+        local restored = rt.restore_sessions()
+        if ui_cfg.auto_open or restored > 0 then
+          if not rt.active_session() then
+            rt.create_session({})
+          end
+          require("agent_core.runtime.ui").workspace()
+        end
+      end)
+      if not ok then
+        vim.notify("[agent_core] session restore failed: " .. tostring(err), vim.log.levels.ERROR)
+      end
+    end
+    if vim.fn.exists(":Lazy") == 2 then
+      vim.api.nvim_create_autocmd("User", {
+        pattern = "LazyDone",
+        once = true,
+        callback = function()
+          Platform.ensure_wsl_clipboard()
+          vim.defer_fn(restore_on_startup, 100)
+        end,
+      })
+    else
+      vim.api.nvim_create_autocmd("VimEnter", {
+        once = true,
+        callback = function()
+          vim.defer_fn(restore_on_startup, 300)
+        end,
+      })
+    end
+  end
+
+  vim.api.nvim_create_user_command("AgentSwitch", function(args)
+    require("agent_core.profiles").switch_cmd(args.args ~= "" and args.args or nil)
+  end, { nargs = "*", desc = "Switch agent/key profile (optionally by name)" })
+
+  vim.api.nvim_create_user_command("AgentModel", function()
+    require("agent_core.pickers").pick_model(function(entry)
+      if entry then
+        require("agent_core.profiles").switch_model(entry)
+      end
     end)
-  end, { desc = "Switch agent/key profile" })
+  end, { desc = "Switch the active model from the pooled registry" })
+
+  vim.api.nvim_create_user_command("AgentModelClear", function()
+    require("agent_core.profiles").clear_model_override()
+  end, { desc = "Reset the active model to the profile default" })
 
   vim.api.nvim_create_user_command("AgentMode", function()
     require("agent_core.pickers").pick_mode(function(mode)
-      require("agent_core.modes").switch(mode)
+      if mode then
+        require("agent_core.modes").switch(mode)
+      end
     end)
   end, { desc = "Switch agent mode (ask/plan/debug/agent/multitask)" })
 
@@ -345,7 +444,7 @@ function M.setup(opts)
     local Profiles = require("agent_core.profiles")
     local active = vim.g.agent_active_profile or Profiles.get_active() or "(none)"
     vim.notify("Agent profile: " .. active, vim.log.levels.INFO)
-  end, { desc = "Show the active agent profile" })
+  end, { desc = "Show the active profile (read-only)" })
 
   vim.api.nvim_create_user_command("AgentPolicy", function(args)
     require("agent_core.policy").policy_cmd(args.args)
@@ -362,6 +461,38 @@ function M.setup(opts)
   vim.api.nvim_create_user_command("AgentSetup", function()
     require("agent_core.setup").setup_cmd()
   end, { desc = "First-run setup wizard: keys, endpoints, policy" })
+
+  vim.api.nvim_create_user_command("AgentSettingsClear", function(args)
+    require("agent_core.reset").clear_cmd(args.bang)
+  end, { bang = true, desc = "Wipe all agent_core state and API keys (first-install reset)" })
+
+  vim.api.nvim_create_user_command("AgentKey", function(args)
+    require("agent_core.keys").cmd(args.bang, args.args)
+  end, { nargs = "*", bang = true, desc = "Set (or remove with !) a profile's API key" })
+
+  vim.api.nvim_create_user_command("AgentProfileEnable", function(args)
+    require("agent_core.registry").enable_cmd(args.args)
+  end, { nargs = "*", desc = "Enable a chat profile (persisted setup override)" })
+
+  vim.api.nvim_create_user_command("AgentProfileDisable", function(args)
+    require("agent_core.registry").disable_cmd(args.args)
+  end, { nargs = "*", desc = "Disable a chat profile (persisted setup override)" })
+
+  vim.api.nvim_create_user_command("AgentEndpointList", function()
+    require("agent_core.registry").endpoint_list_cmd()
+  end, { desc = "List Ollama endpoints" })
+
+  vim.api.nvim_create_user_command("AgentEndpointAdd", function(args)
+    require("agent_core.registry").endpoint_add_cmd(args.args)
+  end, { nargs = "*", desc = "Add a remote Ollama endpoint" })
+
+  vim.api.nvim_create_user_command("AgentEndpointRemove", function(args)
+    require("agent_core.registry").endpoint_remove_cmd(args.args)
+  end, { nargs = "*", desc = "Remove a remote Ollama endpoint" })
+
+  vim.api.nvim_create_user_command("AgentManager", function()
+    require("agent_core.manager").open()
+  end, { desc = "Manage profiles, modes, policy, and Ollama endpoints" })
 
   vim.api.nvim_create_user_command("AgentCatalogUpdate", function()
     require("agent_core.catalog").update_cmd()
@@ -406,6 +537,22 @@ function M.setup(opts)
   vim.api.nvim_create_user_command("AgentHistory", function()
     require("agent_core.history").list_cmd()
   end, { desc = "List prior agent sessions" })
+
+  vim.api.nvim_create_user_command("AgentSessionBind", function(args)
+    require("agent_core.history").session_bind_cmd(args.args)
+  end, { nargs = "*", desc = "Bind the current session to a profile (restored on resume)" })
+
+  vim.api.nvim_create_user_command("AgentRename", function(args)
+    require("agent_core.history").rename_cmd(args.args)
+  end, { nargs = "*", desc = "Rename the current agent session" })
+
+  vim.api.nvim_create_user_command("AgentFork", function(args)
+    require("agent_core.history").fork_cmd(args.args)
+  end, { nargs = "*", desc = "Fork the current agent session into a new chat" })
+
+  vim.api.nvim_create_user_command("AgentRewind", function(args)
+    require("agent_core.history").rewind_cmd(args.args)
+  end, { nargs = "*", desc = "Rewind the current agent session to an earlier message" })
 
   vim.api.nvim_create_user_command("AgentAutomationList", function()
     require("agent_core.automation").list_cmd()
@@ -552,6 +699,18 @@ function M.setup(opts)
     require("agent_core.plan").build(args.args ~= "" and args.args or nil, { new_chat = true })
   end, { nargs = "*", desc = "Build the current/latest plan in a fresh agent session" })
 
+  vim.api.nvim_create_user_command("AgentPlans", function()
+    require("agent_core.plan_manager").open()
+  end, { desc = "Open the plan + idea manager" })
+
+  vim.api.nvim_create_user_command("AgentPlanIdea", function(args)
+    require("agent_core.plan_manager").add_idea_cmd(args.args ~= "" and args.args or nil)
+  end, { nargs = "*", desc = "Add an idea to the plan backlog" })
+
+  vim.api.nvim_create_user_command("AgentPlansToggle", function()
+    require("agent_core.plan_manager").toggle()
+  end, { desc = "Toggle between the plan manager and the reminder badge" })
+
   vim.api.nvim_create_user_command("AgentCheckpoint", function(args)
     require("agent_core.checkpoint").checkpoint_cmd(args.args ~= "" and args.args or nil)
   end, { nargs = "*", desc = "Snapshot the working tree (git patch checkpoint)" })
@@ -559,6 +718,14 @@ function M.setup(opts)
   vim.api.nvim_create_user_command("AgentRollback", function(args)
     require("agent_core.checkpoint").rollback_cmd(args.args ~= "" and args.args or nil)
   end, { nargs = "*", desc = "Restore a checkpoint (git apply -R)" })
+
+  vim.api.nvim_create_user_command("AgentKeep", function()
+    require("agent_core.session_edits").keep_cmd()
+  end, { desc = "Keep the current turn's edits (advance the discard baseline)" })
+
+  vim.api.nvim_create_user_command("AgentDiscard", function()
+    require("agent_core.session_edits").discard_cmd()
+  end, { desc = "Discard this chat's edits since the last keep" })
 
   vim.api.nvim_create_user_command("AgentDebugCleanup", function()
     require("agent_core.debug").cleanup()
@@ -612,6 +779,10 @@ function M.setup(opts)
     require("agent_core.memory").show()
   end, { desc = "Show persistent agent memory" })
 
+  vim.api.nvim_create_user_command("AgentCheatsheet", function()
+    require("agent_core.cheatsheet").open()
+  end, { desc = "Show the agent_core command + keymap cheat sheet" })
+
   vim.api.nvim_create_user_command("AgentRun", function(args)
     require("agent_core.runner").run_cmd(args.args)
   end, { nargs = "*", desc = "Run one prompt headlessly and print the answer" })
@@ -620,6 +791,45 @@ function M.setup(opts)
     require("agent_core.mentions").mentions_cmd(args.args)
   end, { nargs = "*", desc = "Expand @-mentions into context and show the result" })
 
+  vim.api.nvim_create_user_command("AgentChat", function(args)
+    local rt = require("agent_core.runtime")
+    local ui = require("agent_core.runtime.ui")
+    if not rt.active_session() then
+      rt.create_session({})
+    end
+    local prompt = args.args
+    if prompt and prompt ~= "" then
+      rt.submit(prompt, { open = false })
+    end
+    ui.workspace()
+  end, { nargs = "*", desc = "Open the IDE chat layout (optionally submit a prompt)" })
+
+  vim.api.nvim_create_user_command("AgentIde", function()
+    require("agent_core.runtime.ui").workspace()
+  end, { desc = "Open or refresh the Cursor-style IDE chat layout" })
+
+  vim.api.nvim_create_user_command("AgentIdeClose", function()
+    require("agent_core.runtime.ui").close_workspace()
+  end, { desc = "Close the IDE chat layout splits" })
+
+  vim.api.nvim_create_user_command("AgentNew", function(args)
+    local rt = require("agent_core.runtime")
+    local ui = require("agent_core.runtime.ui")
+    local prompt = args.args
+    if prompt and prompt ~= "" then
+      rt.submit(prompt, { new = true, open = false })
+      ui.workspace()
+    else
+      local s = rt.create_session({})
+      rt.focus_session(s.id)
+      ui.workspace()
+    end
+  end, { nargs = "*", desc = "Start a fresh chat session" })
+
+  vim.keymap.set("n", "<leader>a ", "<cmd>AgentChat<cr>", { desc = "Open IDE chat layout" })
+  vim.keymap.set("n", "<leader>a<Space>", "<cmd>AgentChat<cr>", { desc = "Open IDE chat layout" })
+  vim.keymap.set("n", "<leader>a;", "<cmd>AgentIdeClose<cr>", { desc = "Close IDE chat layout" })
+  vim.keymap.set("n", "<leader>aT", "<cmd>AgentNew<cr>", { desc = "Start a fresh chat session" })
   vim.keymap.set("n", "<leader>aP", "<cmd>AgentSwitch<cr>", { desc = "Switch agent profile" })
   vim.keymap.set("n", "<leader>aI", "<cmd>AgentIndex<cr>", { desc = "Index project (brief)" })
   vim.keymap.set("n", "<leader>ap", "<cmd>AgentProfile<cr>", { desc = "Show active agent profile" })
@@ -633,12 +843,17 @@ function M.setup(opts)
   vim.keymap.set("n", "<leader>an", "<cmd>AgentNotepad<cr>", { desc = "Open a notepad" })
   vim.keymap.set("n", "<leader>ab", "<cmd>AgentBestOfN<cr>", { desc = "Compare a prompt across profiles" })
   vim.keymap.set("n", "<leader>aB", "<cmd>AgentPlanBuild<cr>", { desc = "Build the current plan" })
+  vim.keymap.set("n", "<leader>aq", "<cmd>AgentPlans<cr>", { desc = "Manage plans and ideas" })
+  vim.keymap.set("n", "<leader>aQ", "<cmd>AgentPlansToggle<cr>", { desc = "Toggle plan/idea reminder badge" })
   vim.keymap.set("n", "<leader>ac", "<cmd>AgentCheckpoint<cr>", { desc = "Snapshot working tree (checkpoint)" })
+  vim.keymap.set("n", "<leader>aK", "<cmd>AgentKeep<cr>", { desc = "Keep current turn's edits" })
+  vim.keymap.set("n", "<leader>aX", "<cmd>AgentDiscard<cr>", { desc = "Discard edits since last keep" })
   vim.keymap.set("n", "<leader>ad", "<cmd>AgentDebugCleanup<cr>", { desc = "Remove debug instrumentation" })
   vim.keymap.set("n", "<leader>aD", "<cmd>AgentDebugStart<cr>", { desc = "Launch debug session (real debugger)" })
   vim.keymap.set("n", "<leader>ae", "<cmd>AgentPredictEdit<cr>", { desc = "Predictive edit (Tab)" })
   vim.keymap.set("n", "<leader>ak", "<cmd>AgentInlineEdit<cr>", { desc = "Inline edit per instruction" })
   vim.keymap.set("n", "<leader>a@", "<cmd>AgentMentions<cr>", { desc = "Expand @-mentions into context" })
+  vim.keymap.set("n", "<leader>a?", "<cmd>AgentCheatsheet<cr>", { desc = "Show command + keymap cheat sheet" })
   vim.keymap.set("n", "<leader>aR", "<cmd>AgentRun<cr>", { desc = "Run a prompt headlessly" })
   vim.keymap.set("n", "<leader>aM", "<cmd>AgentMemory<cr>", { desc = "Show agent memory" })
   vim.keymap.set("n", "<leader>ag", "<cmd>AgentBugbot<cr>", { desc = "Local Bugbot review" })
@@ -646,11 +861,39 @@ function M.setup(opts)
   vim.keymap.set("n", "<leader>aC", "<cmd>AgentCommand<cr>", { desc = "Run a command from the palette" })
   vim.keymap.set("n", "<leader>aL", "<cmd>AgentNextLocation<cr>", { desc = "Jump to next predicted edit location" })
   vim.keymap.set("n", "<leader>aH", "<cmd>AgentHistory<cr>", { desc = "List prior agent sessions" })
+  vim.keymap.set("n", "<leader>ah", "<cmd>AgentSessionBind<cr>", { desc = "Bind session to a profile" })
+  vim.keymap.set("n", "<leader>ar", "<cmd>AgentRename<cr>", { desc = "Rename the current session" })
+  vim.keymap.set("n", "<leader>aF", "<cmd>AgentFork<cr>", { desc = "Fork the current session" })
+  vim.keymap.set("n", "<leader>aU", "<cmd>AgentRewind<cr>", { desc = "Rewind the current session" })
   vim.keymap.set("n", "<leader>aA", "<cmd>AgentAutomationList<cr>", { desc = "List scheduled automations" })
   vim.keymap.set("n", "<leader>aa", "<cmd>AgentDiffApply<cr>", { desc = "Apply accepted diff hunks" })
   vim.keymap.set("n", "<leader>aY", "<cmd>AgentDiffAccept<cr>", { desc = "Accept diff hunk" })
   vim.keymap.set("n", "<leader>aN", "<cmd>AgentDiffReject<cr>", { desc = "Reject diff hunk" })
   vim.keymap.set("n", "<leader>aE", "<cmd>AgentCoordinatedEdit<cr>", { desc = "Multi-file coordinated edit" })
+
+  -- Reminder startup popup: once per session, nudge about outstanding plans and
+  -- undrafted ideas. Headless-guarded (mirrors setup.lua's auto-prompt guard).
+  if #vim.api.nvim_list_uis() == 0 then
+    return
+  end
+  local plan_cfg = M.config.plan or {}
+  local remind = plan_cfg.remind or {}
+  if remind.enabled ~= false and remind.startup_popup ~= false then
+    vim.schedule(function()
+      local summary = require("agent_core.plan").summary()
+      local outstanding = summary.unfinished + summary.ideas
+      if outstanding > 0 then
+        local parts = {}
+        if summary.unfinished > 0 then
+          parts[#parts + 1] = string.format("%d unfinished plan%s", summary.unfinished, summary.unfinished == 1 and "" or "s")
+        end
+        if summary.ideas > 0 then
+          parts[#parts + 1] = string.format("%d idea%s", summary.ideas, summary.ideas == 1 and "" or "s")
+        end
+        vim.notify("agent_core: " .. table.concat(parts, ", ") .. " — :AgentPlans", vim.log.levels.INFO)
+      end
+    end)
+  end
 end
 
 --- Returns the project brief text to inject into the system prompt,
@@ -670,52 +913,58 @@ function M.get_brief_prompt()
 end
 
 --- Returns the active mode persona for the system prompt, or "" when no mode
---- is set. Wire this into avante's system_prompt alongside get_brief_prompt().
+--- is set. Wire this into the owned runtime's system-prompt assembly alongside get_brief_prompt().
 function M.get_mode_prompt()
   return require("agent_core.modes").get_mode_prompt()
 end
 
+--- Returns the active profile persona for the system prompt, or "" when none
+--- is set. Wire this into build_system_prompt alongside get_mode_prompt().
+function M.get_profile_persona()
+  return require("agent_core.profiles").get_persona()
+end
+
 --- Returns the compact multi-root workspace index for the system prompt, or ""
---- when no projects are registered. Wire this into avante's system_prompt after
+--- when no projects are registered. Wire this into the owned runtime's system-prompt assembly after
 --- get_brief_prompt().
 function M.get_workspace_prompt()
   return require("agent_core.workspace").get_workspace_prompt()
 end
 
 --- Returns the aggregated project + user rules block for the system prompt, or
---- "" when no rule files exist. Wire this into avante's system_prompt.
+--- "" when no rule files exist. Wire this into the owned runtime's system-prompt assembly.
 function M.get_rules_prompt()
   return require("agent_core.rules").get_rules_prompt()
 end
 
 --- Returns the auto-attached editor context block (open buffer window, visual
 --- selection, LSP diagnostics) for the system prompt, or "" when empty.
---- Wire this into avante's system_prompt.
+--- Wire this into the owned runtime's system-prompt assembly.
 function M.get_context_prompt()
   return require("agent_core.context").get_context_prompt()
 end
 
 --- Returns the compact notepad index (titles only) for the system prompt, or ""
---- when no notes exist. Wire this into avante's system_prompt.
+--- when no notes exist. Wire this into the owned runtime's system-prompt assembly.
 function M.get_notepad_prompt()
   return require("agent_core.notepad").get_notepad_prompt()
 end
 
 --- Returns the compact agent-memory index (keys only) for the system prompt, or
---- "" when no memories exist. Wire this into avante's system_prompt.
+--- "" when no memories exist. Wire this into the owned runtime's system-prompt assembly.
 function M.get_memory_prompt()
   return require("agent_core.memory").get_memory_prompt()
 end
 
 --- Returns the compact skill index (name + description + argument hint) for the
---- system prompt, or "" when no skills exist. Wire this into avante's system_prompt.
+--- system prompt, or "" when no skills exist. Wire this into the owned runtime's system-prompt assembly.
 function M.get_skills_prompt()
   return require("agent_core.skills").get_skills_prompt()
 end
 
 --- Returns the compact command-palette index (name + description + args) for the
---- system prompt, or "" when no commands exist. Wire this into avante's
---- system_prompt.
+--- system prompt, or "" when no commands exist. Wire this into the owned
+--- runtime's system-prompt assembly.
 function M.get_commands_prompt()
   return require("agent_core.commands").get_commands_prompt()
 end
@@ -737,9 +986,9 @@ function M.run(prompt, opts, cb)
 end
 
 --- Returns every agent_core custom tool, each wrapped by lifecycle hooks, ready
---- to spread into avante's `custom_tools`. Centralizes wiring so the user's
---- avante.lua only needs to add MCP tools plus this list.
----@return AvanteLLMTool[]
+--- to spread into the owned runtime's tool registry (agent_core.runtime.tools).
+--- Centralizes wiring so the runtime gets the full tool set from one place.
+---@return AgentTool[]
 function M.get_custom_tools()
   local hooks = require("agent_core.hooks")
   local tools = {}
