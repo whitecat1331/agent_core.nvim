@@ -106,9 +106,12 @@ end
 
 --- Detect Windows Subsystem for Linux via /proc/version.
 ---@return boolean
-local function is_wsl()
+function M.is_wsl()
   if M.is_windows() then
     return false
+  end
+  if vim.fn.has("wsl") == 1 then
+    return true
   end
   local f = io.open("/proc/version", "r")
   if not f then
@@ -116,7 +119,35 @@ local function is_wsl()
   end
   local content = f:read("*a")
   f:close()
-  return content ~= nil and content:lower():find("microsoft", 1, true) ~= nil
+  return content ~= nil and content:find("microsoft", 1, true) ~= nil
+end
+
+--- Use Windows clip.exe for the system clipboard on WSL (avoids broken xclip/DISPLAY).
+--- Skips when the user or LazyVim already configured vim.g.clipboard.
+---@return boolean configured
+function M.ensure_wsl_clipboard()
+  if not M.is_wsl() then
+    return false
+  end
+  if type(vim.g.clipboard) == "table" and vim.g.clipboard.name then
+    return false
+  end
+  if vim.fn.executable("clip.exe") ~= 1 then
+    return false
+  end
+  vim.g.clipboard = {
+    name = "AgentCoreWslClipboard",
+    copy = {
+      ["+"] = "clip.exe",
+      ["*"] = "clip.exe",
+    },
+    paste = {
+      ["+"] = 'powershell.exe -NoLogo -NoProfile -c [Console]::Out.Write($(Get-Clipboard -Raw).ToString())',
+      ["*"] = 'powershell.exe -NoLogo -NoProfile -c [Console]::Out.Write($(Get-Clipboard -Raw).ToString())',
+    },
+    cache_enabled = 0,
+  }
+  return true
 end
 
 --- Short model-facing hint describing the OS, shell, and path style.
@@ -127,7 +158,7 @@ function M.os_hint()
 Use PowerShell commands where possible.
 File paths may use either backslashes (C:\path\to\file) or forward slashes.]]
   end
-  if is_wsl() then
+  if M.is_wsl() then
     return [[IMPORTANT: You are operating inside a Linux WSL (Ubuntu) environment.
 Use standard Bash commands like ls, cat, grep, and find.
 Always use forward slashes (/) for file paths.]]
