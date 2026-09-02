@@ -29,7 +29,7 @@ jobs:
           ' CHANGELOG.md > "$RUNNER_TEMP/notes.md"
           echo "notes_path=$RUNNER_TEMP/notes.md" >> "$GITHUB_OUTPUT"
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@c062e08bd532815e2082a85e87e3ef29c3e6d191  # softprops/action-gh-release@v2.0.8
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64  # softprops/action-gh-release@v3.0.3
         with:
           body_path: ${{ steps.changelog.outputs.notes_path }}
           draft: false
