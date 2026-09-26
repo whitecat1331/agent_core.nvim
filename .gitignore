@@ -22,6 +22,11 @@ doc/tags
 .mcphub/
 .semnav/
 
+# Local runtime / scratch state and ad-hoc test output — never committed
+.agent_core/
+tmp/
+tmp_test_out.txt
+
 # Python (detect-secrets, CI helpers)
 __pycache__/
 *.py[cod]
