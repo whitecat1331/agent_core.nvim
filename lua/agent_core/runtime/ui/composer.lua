@@ -1,14 +1,16 @@
 ---@mod agent_core.runtime.ui.composer Multi-line chat composer (owned).
 ---@brief [[
---- Cursor-style input box: a floating multi-line scratch buffer where Enter
---- sends the message and Shift+Enter inserts a newline. Sends through the owned
---- runtime's submit path so slash commands, @-context variables, and the mode
---- permission policy all apply unchanged.
+--- Cursor-style input box: a floating multi-line scratch buffer. Enter inserts a
+--- newline; send keys submit the message (see SEND_KEYS in set_keymaps). Sends through the owned runtime's submit
+--- path so slash commands, @-context variables, and the mode permission policy
+--- all apply unchanged.
 ---
 --- A statusline footer shows clickable mode and model pills (bottom-left).
 --- Normal-mode keys on the composer buffer:
----   <C-n> new chat   <C-m> model picker   <C-d> mode picker
----   <C-s> stop       <C-x><C-o> attach menu   q close
+---   send keys   <C-n> new chat   <C-m> model picker   <C-d> mode picker
+---   (<C-CR>, <S-CR>, <M-CR>, <C-S-CR>, or <C-g><CR>)
+---   <C-s> stop    <C-x><C-o> attach menu   q close
+--- Insert-mode: send keys above plus <C-j> (terminal), <C-d> mode picker (click pills).
 --- Pure helpers (normalize, menu_items, footer_labels) are headless-testable;
 --- the float/buffer glue is thin and no-ops when no UI is attached.
 ---@brief ]]
@@ -56,13 +58,16 @@ function M.mode_label(active)
   if not ok then
     return "Agent"
   end
-  local name = active or Modes.get_active()
+  local name = active or Modes.get_active() or vim.g.agent_mode
   local m = name and Modes.find(name)
   if m and m.label and m.label ~= "" then
     return m.label
   end
   if m and m.name and m.name ~= "" then
     return m.name:sub(1, 1):upper() .. m.name:sub(2)
+  end
+  if name and name ~= "" then
+    return name:sub(1, 1):upper() .. name:sub(2)
   end
   return "Agent"
 end
@@ -73,18 +78,33 @@ end
 ---@param model string|nil
 ---@return string
 function M.model_label(provider, model)
-  if select("#", provider, model) == 0 then
+  local from_session = select("#", provider, model) == 0
+    or (provider == nil and model == nil)
+  if from_session then
     local rt = require("agent_core.runtime")
     local s = rt.active_session()
-    provider = s and s.provider
     model = s and s.model
+    if not model or model == "" then
+      model = vim.g.agent_active_model
+    end
+    if not model or model == "" then
+      local ok, Profiles = pcall(require, "agent_core.profiles")
+      if ok then
+        local p = Profiles.find(Profiles.get_active())
+        if p then
+          model = Profiles.effective_model(p)
+        end
+      end
+    end
+  elseif model and model ~= "" then
+    -- explicit args: model id only
+  elseif provider and provider ~= "" then
+    model = provider
   end
-  local Render = require("agent_core.runtime.ui.render")
-  local label = Render.model_indicator(provider, model, nil)
-  if label == "?" then
-    return "Model"
+  if model and model ~= "" then
+    return model
   end
-  return label
+  return "Model"
 end
 
 --- Footer pill text for mode and model selectors. Pure.
@@ -109,6 +129,25 @@ function M.footer_line(mode_label, model_label)
   return line, mode_end
 end
 
+--- Which pill was hit? `col` and `mode_end_col` are 1-based byte columns. Pure.
+---@param col integer
+---@param mode_end_col integer
+---@return "mode"|"model"
+function M.pill_target(col, mode_end_col)
+  if col <= mode_end_col then
+    return "mode"
+  end
+  return "model"
+end
+
+--- Whether a line is the composer pill row (mode + model selectors). Pure.
+---@param text string
+---@return boolean
+function M.is_pill_line(text)
+  text = text or ""
+  return text:match("^ .+▾   .+▾$") ~= nil
+end
+
 --- Line index of the bottom pill row, or nil.
 ---@param buf integer|nil
 ---@return integer|nil
@@ -122,7 +161,7 @@ function M.pill_line_index(buf)
     return nil
   end
   local last = vim.api.nvim_buf_get_lines(buf, n - 1, n, false)[1] or ""
-  if last:match("^ Agent ▾") then
+  if M.is_pill_line(last) then
     return n
   end
   return nil
@@ -134,7 +173,9 @@ function M.sync_pill_line()
     return
   end
   pcall(require("agent_core.runtime.ui.highlights").setup)
-  local line, mode_end = M.footer_line(M.mode_label(), M.model_label())
+  local mode_l = M.mode_label()
+  local model_l = M.model_label()
+  local line, mode_end = M.footer_line(mode_l, model_l)
   state.footer_mode_end = mode_end
   local buf = state.buf
   vim.api.nvim_buf_set_option(buf, "modifiable", true)
@@ -171,7 +212,8 @@ function M.sync_pill_line()
 end
 
 local function on_pill_click(col)
-  if col <= state.footer_mode_end then
+  local target = M.pill_target(col, state.footer_mode_end)
+  if target == "mode" then
     M.pick_mode()
   else
     M.pick_model()
@@ -362,7 +404,7 @@ local function create_buffer()
   vim.api.nvim_buf_set_option(buf, "buftype", "nofile")
   vim.api.nvim_buf_set_option(buf, "bufhidden", "hide")
   vim.api.nvim_buf_set_option(buf, "swapfile", false)
-  vim.api.nvim_buf_set_option(buf, "filetype", "markdown")
+  vim.api.nvim_buf_set_option(buf, "filetype", "agent_core_composer")
   return buf
 end
 
@@ -471,12 +513,42 @@ local function submit(text)
 end
 
 --- Send the composer buffer contents, clearing the buffer first.
+local function resolve_composer_buf()
+  if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
+    local ft = vim.api.nvim_buf_get_option(state.buf, "filetype")
+    if ft == "agent_core_composer" then
+      return state.buf
+    end
+  end
+  local cur = vim.api.nvim_get_current_buf()
+  if vim.api.nvim_buf_is_valid(cur) then
+    local ft = vim.api.nvim_buf_get_option(cur, "filetype")
+    if ft == "agent_core_composer" then
+      state.buf = cur
+      return cur
+    end
+  end
+  if state.win and vim.api.nvim_win_is_valid(state.win) then
+    local win_buf = vim.api.nvim_win_get_buf(state.win)
+    if vim.api.nvim_buf_is_valid(win_buf) then
+      local ft = vim.api.nvim_buf_get_option(win_buf, "filetype")
+      if ft == "agent_core_composer" then
+        state.buf = win_buf
+        return win_buf
+      end
+    end
+  end
+  return state.buf
+end
+
 function M.send_buffer()
-  if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
+  local buf = resolve_composer_buf()
+  if not buf or not vim.api.nvim_buf_is_valid(buf) then
     return
   end
-  local lines = vim.api.nvim_buf_get_lines(state.buf, 0, -1, false)
-  local pill = M.pill_line_index(state.buf)
+  state.buf = buf
+  local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+  local pill = M.pill_line_index(buf)
   if pill and pill <= #lines then
     table.remove(lines, pill)
   end
@@ -484,11 +556,11 @@ function M.send_buffer()
   if text == "" then
     return
   end
-  vim.api.nvim_buf_set_option(state.buf, "modifiable", true)
+  vim.api.nvim_buf_set_option(buf, "modifiable", true)
   if pill then
-    vim.api.nvim_buf_set_lines(state.buf, 0, pill - 1, false, {})
+    vim.api.nvim_buf_set_lines(buf, 0, pill - 1, false, {})
   else
-    vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, {})
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {})
   end
   submit(text)
 end
@@ -594,13 +666,40 @@ function M.pick_mode()
   end
 end
 
+local SEND_KEYS = {
+  "<C-CR>", -- GUI / terminals with CSI-u Ctrl+Enter binding
+  "<S-CR>", -- Shift+Enter (when the terminal sends a distinct code)
+  "<M-CR>", -- Alt+Enter
+  "<C-S-CR>",
+  "<C-g><CR>", -- chord fallback in all terminals
+}
+
+-- Insert-only: normal-mode <C-s> stops the agent run.
+local INSERT_SEND_KEYS = {
+  "<C-j>", -- terminal-safe submit (Ctrl+S is XON flow-control in many terminals)
+}
+
 local function set_keymaps(buf)
   local opts = { noremap = true, silent = true, buffer = buf }
-  vim.keymap.set("i", "<CR>", function()
+  local function send(trigger)
     M.send_buffer()
-  end, opts)
-  -- Shift+Enter (also <C-j>) inserts a literal newline; <CR> is remapped above.
-  vim.keymap.set("i", "<C-j>", "<CR>", opts)
+  end
+  -- Enter inserts a newline (default). Send keys submit (Cursor-style).
+  -- Terminals send Ctrl+Enter as plain <CR>; use <C-j>, <C-g><CR>, or :AgentSend.
+  -- Do not map <C-M> in insert mode: it is the same key as <CR> in most terminals.
+  for _, key in ipairs(SEND_KEYS) do
+    vim.keymap.set("i", key, function()
+      send(key)
+    end, opts)
+    vim.keymap.set("n", key, function()
+      send(key)
+    end, opts)
+  end
+  for _, key in ipairs(INSERT_SEND_KEYS) do
+    vim.keymap.set("i", key, function()
+      send(key)
+    end, opts)
+  end
   vim.keymap.set("i", "<C-x><C-o>", function()
     vim.schedule(M.menu)
   end, opts)
@@ -626,9 +725,6 @@ local function set_keymaps(buf)
   vim.keymap.set("i", "<C-d>", function()
     vim.schedule(M.pick_mode)
   end, opts)
-  vim.keymap.set("i", "<C-M>", function()
-    vim.schedule(M.pick_model)
-  end, opts)
 
   local function pill_click()
     local pill = M.pill_line_index(buf)
@@ -643,9 +739,10 @@ local function set_keymaps(buf)
       local pill = M.pill_line_index(buf)
       local pos = vim.fn.getmousepos()
       if pill and pos.line == pill then
+        local byte_col = pos.col or 1
         vim.cmd("stopinsert")
-        vim.api.nvim_win_set_cursor(0, { pill, pos.wincol or 1 })
-        on_pill_click(pos.wincol or pos.column or 1)
+        vim.api.nvim_win_set_cursor(0, { pill, math.max(0, byte_col - 1) })
+        on_pill_click(byte_col)
       end
     end)
   end, opts)
@@ -695,9 +792,9 @@ function M.open(width, height)
   end
   if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
     state.buf = create_buffer()
-    set_keymaps(state.buf)
     attach_chrome_autocmds(state.buf)
   end
+  set_keymaps(state.buf)
 
   local cols = width or vim.o.columns
   local h = height or 6
@@ -732,10 +829,10 @@ function M.open_in_win(win)
   end
   if not state.buf or not vim.api.nvim_buf_is_valid(state.buf) then
     state.buf = create_buffer()
-    set_keymaps(state.buf)
     attach_chrome_autocmds(state.buf)
     attach_pill_autocmds(state.buf)
   end
+  set_keymaps(state.buf)
   vim.api.nvim_win_set_buf(win, state.buf)
   state.win = win
   state.inline_pills = true

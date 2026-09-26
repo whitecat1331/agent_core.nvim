@@ -72,7 +72,11 @@ function M.open(ui)
     pane.winid = state.chat_win
     ui.apply_title(pane)
     chatlist.render()
-    composer.refresh_chrome()
+    if state.composer_win and vim.api.nvim_win_is_valid(state.composer_win) then
+      composer.open_in_win(state.composer_win)
+    else
+      composer.refresh_chrome()
+    end
     return
   end
 

@@ -804,6 +804,10 @@ function M.setup(opts)
     ui.workspace()
   end, { nargs = "*", desc = "Open the IDE chat layout (optionally submit a prompt)" })
 
+  vim.api.nvim_create_user_command("AgentSend", function()
+    require("agent_core.runtime.ui.composer").send_buffer()
+  end, { desc = "Send the composer prompt" })
+
   vim.api.nvim_create_user_command("AgentIde", function()
     require("agent_core.runtime.ui").workspace()
   end, { desc = "Open or refresh the Cursor-style IDE chat layout" })
