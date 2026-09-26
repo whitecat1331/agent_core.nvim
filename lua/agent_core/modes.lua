@@ -290,6 +290,12 @@ function M.switch(mode)
   require("agent_core.keys").save_active_mode(mode.name)
 
   vim.notify("Agent mode: " .. (mode.label or mode.name), vim.log.levels.INFO)
+
+  vim.schedule(function()
+    pcall(function()
+      require("agent_core.runtime.ui.composer").refresh_chrome()
+    end)
+  end)
 end
 
 --- Return the mode persona for the system prompt, or "" when no mode is set.

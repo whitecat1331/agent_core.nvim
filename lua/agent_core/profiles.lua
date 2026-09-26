@@ -199,6 +199,12 @@ function M.switch_model(entry)
     M.switch(p)
   end
   vim.notify("Agent model: " .. entry.provider .. " / " .. entry.model, vim.log.levels.INFO)
+
+  vim.schedule(function()
+    pcall(function()
+      require("agent_core.runtime.ui.composer").refresh_chrome()
+    end)
+  end)
 end
 
 --- Apply a profile: resolve API key, set persona, switch the active session's
@@ -266,6 +272,12 @@ function M.clear_model_override()
     vim.g.agent_active_model = nil
     vim.notify("Agent model override cleared", vim.log.levels.INFO)
   end
+
+  vim.schedule(function()
+    pcall(function()
+      require("agent_core.runtime.ui.composer").refresh_chrome()
+    end)
+  end)
 end
 
 --- Backing for :AgentSwitch [name]. Switch by name when given, else open the
