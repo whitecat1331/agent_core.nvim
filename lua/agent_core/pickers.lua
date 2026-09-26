@@ -1,5 +1,77 @@
 local M = {}
 
+--- Scroll the snacks picker list to the active (`current`) item.
+---@param picker table
+---@param Snacks table
+local function scroll_to_active(picker, Snacks)
+  for i, item in ipairs(picker:items()) do
+    if item.current then
+      picker.list:view(i)
+      local actions = Snacks.picker and Snacks.picker.actions
+      if actions and actions.list_scroll_center then
+        actions.list_scroll_center(picker)
+      end
+      break
+    end
+  end
+end
+
+--- Build snacks picker items for behavior modes. Pure when `active_name` is passed.
+---@param modes table[]
+---@param active_name string|nil
+---@return table[]
+function M.mode_picker_items(modes, active_name)
+  local items = {}
+  for _, m in ipairs(modes) do
+    local is_active = active_name ~= nil and m.name == active_name
+    local suffix = is_active and "  [active]" or ""
+    items[#items + 1] = {
+      text = string.format("%s  |  %s%s", m.label or m.name, m.read_only and "read-only" or "full", suffix),
+      mode = m,
+      current = is_active,
+    }
+  end
+  return items
+end
+
+--- Build snacks picker items for chat models. Pure when `active` is passed.
+---@param models table[]
+---@param active {provider:string,model:string}|nil
+---@return table[]
+function M.model_picker_items(models, active)
+  local items = {}
+  for _, e in ipairs(models) do
+    local is_active = active
+      and e.provider == active.provider
+      and e.model == active.model
+    local suffix = is_active and "  [active]" or ""
+    items[#items + 1] = {
+      text = string.format("%s  |  %s  |  %s%s", e.model or "?", e.provider or "?", e.quality_tier or "?", suffix),
+      entry = e,
+      current = is_active,
+    }
+  end
+  return items
+end
+
+--- Resolve the active provider/model for model picker highlighting.
+---@return table|nil
+local function active_model_entry()
+  local Registry = require("agent_core.registry")
+  local am = Registry.active_model()
+  if am and am.provider and am.model then
+    return am
+  end
+  local ok, rt = pcall(require, "agent_core.runtime")
+  if ok then
+    local s = rt.active_session()
+    if s and s.provider and s.model then
+      return { provider = s.provider, model = s.model }
+    end
+  end
+  return nil
+end
+
 --- Open a picker to choose a profile, then invoke `cb(profile)`.
 function M.pick_profile(cb)
   local Profiles = require("agent_core.profiles")
@@ -58,14 +130,8 @@ end
 function M.pick_mode(cb)
   local Modes = require("agent_core.modes")
   local modes = Modes.all()
-
-  local items = {}
-  for _, m in ipairs(modes) do
-    table.insert(items, {
-      text = string.format("%s  |  %s", m.label or m.name, m.read_only and "read-only" or "full"),
-      mode = m,
-    })
-  end
+  local active = Modes.get_active()
+  local items = M.mode_picker_items(modes, active)
 
   local ok, Snacks = pcall(require, "snacks.picker")
   if ok and type(Snacks) == "table" and type(Snacks.pick) == "function" then
@@ -74,8 +140,12 @@ function M.pick_mode(cb)
       items = items,
       layout = { preview = false },
       live = true,
+      focus = "list",
       format = function(item)
         return { { item.text } }
+      end,
+      on_show = function(picker)
+        scroll_to_active(picker, Snacks)
       end,
       confirm = function(picker, item)
         picker:close()
@@ -92,15 +162,19 @@ function M.pick_mode(cb)
 
   local choices = {}
   for _, m in ipairs(modes) do
-    table.insert(choices, m.name)
+    local tag = (m.name == active) and " [active]" or ""
+    choices[#choices + 1] = (m.label or m.name) .. tag
   end
   vim.ui.select(choices, { prompt = "Agent mode" }, function(choice)
     if not choice then
       return
     end
-    local m = Modes.find(choice)
-    if m then
-      cb(m)
+    local label = choice:gsub(" %[active%]$", "")
+    for _, m in ipairs(modes) do
+      if (m.label or m.name) == label then
+        cb(m)
+        return
+      end
     end
   end)
 end
@@ -110,14 +184,7 @@ end
 function M.pick_model(cb)
   local Registry = require("agent_core.registry")
   local models = Registry.eligible_models()
-
-  local items = {}
-  for _, e in ipairs(models) do
-    table.insert(items, {
-      text = string.format("%s  |  %s  |  %s", e.model or "?", e.provider or "?", e.quality_tier or "?"),
-      entry = e,
-    })
-  end
+  local items = M.model_picker_items(models, active_model_entry())
 
   local ok, Snacks = pcall(require, "snacks.picker")
   if ok and type(Snacks) == "table" and type(Snacks.pick) == "function" then
@@ -126,8 +193,12 @@ function M.pick_model(cb)
       items = items,
       layout = { preview = false },
       live = true,
+      focus = "list",
       format = function(item)
         return { { item.text } }
+      end,
+      on_show = function(picker)
+        scroll_to_active(picker, Snacks)
       end,
       confirm = function(picker, item)
         picker:close()
