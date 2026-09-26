@@ -21,6 +21,35 @@ local state = { buf = nil, win = nil, footer_win = nil, footer_buf = nil, footer
 
 local chrome_augroup = vim.api.nvim_create_augroup("AgentCoreComposerChrome", { clear = true })
 
+-- #region agent log
+local function _dbg_log_paths()
+  return {
+    vim.fn.stdpath("cache") .. "/agent_core-debug-52d16c.log",
+    "/mnt/c/Users/ployd/Desktop/IMS/debug-52d16c.log",
+    "C:/Users/ployd/Desktop/IMS/debug-52d16c.log",
+    vim.fn.getcwd() .. "/debug-52d16c.log",
+  }
+end
+
+local function _dbg(hypothesisId, location, message, data)
+  local payload = vim.json.encode({
+    sessionId = "52d16c",
+    hypothesisId = hypothesisId,
+    location = location,
+    message = message,
+    data = data or {},
+    timestamp = os.time() * 1000,
+  })
+  for _, path in ipairs(_dbg_log_paths()) do
+    local f = io.open(path, "a")
+    if f then
+      f:write(payload .. "\n")
+      f:close()
+    end
+  end
+end
+-- #endregion
+
 --- Trim trailing newlines and surrounding whitespace so an empty prompt is not
 --- submitted. Pure.
 ---@param text string
@@ -501,6 +530,12 @@ function M.teardown_footer()
 end
 
 local function submit(text)
+  -- #region agent log
+  _dbg("H5", "composer.lua:submit", "submit called", {
+    text_len = text and #text or 0,
+    preview = text and text:sub(1, 40) or "",
+  })
+  -- #endregion
   local rt = require("agent_core.runtime")
   local opts = { open = false }
   if state.new_on_send then
@@ -543,7 +578,20 @@ end
 
 function M.send_buffer()
   local buf = resolve_composer_buf()
+  -- #region agent log
+  _dbg("H2", "composer.lua:send_buffer", "enter", {
+    buf = buf,
+    state_buf = state.buf,
+    buf_valid = buf and vim.api.nvim_buf_is_valid(buf),
+    cur_buf = vim.api.nvim_get_current_buf(),
+    cur_ft = vim.api.nvim_buf_get_option(vim.api.nvim_get_current_buf(), "filetype"),
+    cur_win = vim.api.nvim_get_current_win(),
+  })
+  -- #endregion
   if not buf or not vim.api.nvim_buf_is_valid(buf) then
+    -- #region agent log
+    _dbg("H2", "composer.lua:send_buffer", "abort no buf", {})
+    -- #endregion
     return
   end
   state.buf = buf
@@ -553,6 +601,14 @@ function M.send_buffer()
     table.remove(lines, pill)
   end
   local text = M.normalize(table.concat(lines, "\n"))
+  -- #region agent log
+  _dbg("H2", "composer.lua:send_buffer", "parsed text", {
+    pill = pill,
+    line_count = #lines,
+    text = text,
+    text_empty = text == "",
+  })
+  -- #endregion
   if text == "" then
     return
   end
@@ -679,11 +735,62 @@ local INSERT_SEND_KEYS = {
   "<C-j>", -- terminal-safe submit (Ctrl+S is XON flow-control in many terminals)
 }
 
+-- #region agent log
+local key_probe_attached = false
+
+local function attach_key_probe()
+  if key_probe_attached then
+    return
+  end
+  key_probe_attached = true
+  vim.on_key(function(key)
+    local cur = vim.api.nvim_get_current_buf()
+    if vim.api.nvim_buf_get_option(cur, "filetype") ~= "agent_core_composer" then
+      return
+    end
+    local mode = vim.api.nvim_get_mode().mode
+    if mode:sub(1, 1) ~= "i" then
+      return
+    end
+    _dbg("H12", "composer.lua:on_key", "raw key", {
+      key = key:sub(1, 48),
+      mode = mode,
+      buf = cur,
+    })
+  end, "agent_core_composer_dbg")
+
+  vim.api.nvim_create_autocmd("InsertEnter", {
+    group = chrome_augroup,
+    callback = function(ev)
+      if vim.api.nvim_buf_get_option(ev.buf, "filetype") ~= "agent_core_composer" then
+        return
+      end
+      _dbg("H14", "composer.lua:InsertEnter", "composer focus", {
+        buf = ev.buf,
+        win = vim.fn.bufwinid(ev.buf),
+      })
+    end,
+  })
+end
+-- #endregion
+
 local function set_keymaps(buf)
   local opts = { noremap = true, silent = true, buffer = buf }
   local function send(trigger)
+    -- #region agent log
+    _dbg("H1", "composer.lua:send_keymap", "fired", {
+      trigger = trigger,
+      mode = vim.api.nvim_get_mode().mode,
+      buf = buf,
+      cur_buf = vim.api.nvim_get_current_buf(),
+    })
+    -- #endregion
     M.send_buffer()
   end
+  -- #region agent log
+  _dbg("H6", "composer.lua:set_keymaps", "applied", { buf = buf })
+  attach_key_probe()
+  -- #endregion
   -- Enter inserts a newline (default). Send keys submit (Cursor-style).
   -- Terminals send Ctrl+Enter as plain <CR>; use <C-j>, <C-g><CR>, or :AgentSend.
   -- Do not map <C-M> in insert mode: it is the same key as <CR> in most terminals.
